@@ -19,34 +19,9 @@ import numpy as np
 from datetime import datetime
 import random
 import h5py
+from torch.nn.utils import clip_grad_norm_
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-def Prepare_logger(args):
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.propagate = False
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-    handler.setFormatter(formatter)
-    handler.setLevel(0)
-    logger.addHandler(handler)
-
-    # 指定要创建的文件夹路径
-    folder_path = './save/{}/{}'.format(args.dataset, args.modality)
-
-    # 如果文件夹不存在，则创建文件夹
-    os.makedirs(folder_path, exist_ok=True)
-
-    logfile = './save/{}/{}/modality_{}.log'.format(args.dataset, args.modality, args.modality)
-    file_handler = logging.FileHandler(logfile, mode='w')
-    file_handler.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    return logger
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -79,13 +54,50 @@ parser.add_argument('--seed', type=int, default=2024)
 
 parser.add_argument('--class_num_per_step', type=int, default=7)
 
+# 新加的
+parser.add_argument('--e_prompt', action='store_true', default=False)
+parser.add_argument('--prompt_dim', type=int, default=768)
+
+parser.add_argument('--transfer', action='store_true', default=False)
+parser.add_argument('--warm', action='store_true', default=False)
+
 args = parser.parse_args()
+
+ckpts_root = './save/{}/{}/use-prompt_{}/prompt-length_{}/transfer-{}_warm-{}'.format(args.dataset, args.modality, args.e_prompt,
+                                                                   args.prompt_dim, args.transfer, args.warm)
+figs_root = './save/{}/{}/use-prompt_{}/prompt-length_{}/fig/transfer-{}_warm-{}'.format(args.dataset, args.modality, args.e_prompt,
+                                                                      args.prompt_dim, args.transfer, args.warm)
+
+if not os.path.exists(ckpts_root):
+    os.makedirs(ckpts_root)
+if not os.path.exists(figs_root):
+    os.makedirs(figs_root)
+
+def Prepare_logger(args):
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    handler.setFormatter(formatter)
+    handler.setLevel(0)
+    logger.addHandler(handler)
+
+    logfile = os.path.join(ckpts_root, 'train.log')
+
+    file_handler = logging.FileHandler(logfile, mode='w')
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    return logger
 
 logger = Prepare_logger(args)
 
 def CE_loss(num_classes, logits, label):
     targets = F.one_hot(label, num_classes=num_classes)
-
     loss = -torch.mean(torch.sum(F.log_softmax(logits, dim=-1) * targets, dim=1))
 
     return loss
@@ -98,10 +110,10 @@ def top_1_acc(logits, target):
 def adjust_learning_rate(args, optimizer, epoch):
     miles_list = np.array(args.milestones) - 1
     if epoch in miles_list:
-        current_lr = optimizer.param_groups[0]['lr']
-        new_lr = current_lr * 0.1
-        logger.info('Reduce lr from {} to {}'.format(current_lr, new_lr))
-        for param_group in optimizer.param_groups: 
+        for i, param_group in enumerate(optimizer.param_groups):
+            current_lr = param_group['lr']
+            new_lr = current_lr * 0.1
+            logger.info('Reduce lr from {} to {}'.format(current_lr, new_lr))
             param_group['lr'] = new_lr
 
 def worker_init_fn(worker_id):
@@ -126,10 +138,20 @@ def train(args, step, train_data_set, val_data_set):
     if step == 0:
         model = IncreAudioVisualNet(args, step_out_class_num)
     else:
-        model = torch.load('./save/{}/{}/step_{}_best_{}_model.pkl'.format(args.dataset, args.modality, step-1, args.modality))
+        model = torch.load(os.path.join(ckpts_root, 'step_{}_best_{}_model.pkl'.format(step - 1, args.modality)))
         model.incremental_classifier(step_out_class_num)
-        old_model = torch.load('./save/{}/{}/step_{}_best_{}_model.pkl'.format(args.dataset, args.modality, step-1, args.modality))
+        old_model = torch.load(os.path.join(ckpts_root, 'step_{}_best_{}_model.pkl'.format(step - 1, args.modality)))
         last_step_out_class_num = step * args.class_num_per_step
+
+        # 新老模型需要固定前t个时刻的prompt pool
+        if args.e_prompt:
+            with torch.no_grad():
+                # Transfer previous learned prompt params to the new prompt
+                if args.transfer:
+                    a_prompts = [old_model.a_prompt.prompt[i].data for i in range(step)]
+                    v_prompts = [old_model.v_prompt.prompt[i].data for i in range(step)]
+                    model.a_prompt.prompt[step].data = torch.stack(a_prompts).mean(dim=0)
+                    model.v_prompt.prompt[step].data = torch.stack(v_prompts).mean(dim=0)
 
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
@@ -141,7 +163,27 @@ def train(args, step, train_data_set, val_data_set):
         old_model = old_model.to(device)
         old_model.eval()
 
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.e_prompt:
+        # 为prompt设置不同的学习率
+        a_prompt_params = list(model.a_prompt.parameters())
+        v_prompt_params = list(model.v_prompt.parameters())
+        a_att_prompt_params = list(model.a_prompt_attention.parameters())
+        v_att_prompt_params = list(model.v_prompt_attention.parameters())
+        prompt_params = a_prompt_params + v_prompt_params
+        prompt_att_params = a_att_prompt_params + v_att_prompt_params
+
+        excluded_params = set(prompt_params) | set(prompt_att_params)
+
+        base_params = [p for p in model.parameters() if p not in excluded_params]
+
+        opt = torch.optim.Adam([
+            {'params': base_params, "lr":args.lr / 2.},
+            {'params': prompt_params, "lr":args.lr * 2},
+            {'params': prompt_att_params, "weight_decay": args.weight_decay * 2},
+        ], lr=args.lr, weight_decay=args.weight_decay)
+        # opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     train_loss_list = []
     val_acc_list = []
@@ -169,10 +211,16 @@ def train(args, step, train_data_set, val_data_set):
                 audio = data[1]
                 visual = visual.to(device)
                 audio = audio.to(device)
-                out = model(visual=visual, audio=audio)
+                if args.e_prompt:
+                    task_ids = torch.div(labels, args.class_num_per_step, rounding_mode='trunc').unsqueeze(1)
+                    out, a_sim, v_sim = model(visual=visual, audio=audio, task_id=task_ids)
+                else:
+                    out = model(visual=visual, audio=audio)
 
             if step == 0:
                 loss = CE_loss(step_out_class_num, out, labels)
+                if args.e_prompt:
+                    loss = loss - a_sim - v_sim
             else:
                 with torch.no_grad():
                     if args.modality == 'visual':
@@ -180,10 +228,23 @@ def train(args, step, train_data_set, val_data_set):
                     elif args.modality == 'audio':
                         old_out = old_model(audio=audio).detach()
                     else:
-                        old_out = old_model(visual=visual, audio=audio).detach()
+                        if args.e_prompt:
+                            task_ids = torch.div(labels, args.class_num_per_step, rounding_mode='trunc').unsqueeze(1)
+
+                            mask = (task_ids == step)  # 创建一个掩码，标记所有等于 step 的位置
+                            random_values = torch.randint(0, step, (task_ids.size(0), 1)).to(device)  # 生成随机值
+
+                            # 使用掩码和 where 函数进行条件替换
+                            task_ids_for_kl = torch.where(mask, random_values, task_ids)
+
+                        if args.e_prompt:
+                            old_out, a_sim_old, v_sim_old = old_model(visual=visual, audio=audio, task_id=task_ids_for_kl)
+                            old_out = old_out.detach()
+                        else:
+                            old_out = old_model(visual=visual, audio=audio).detach()
 
                 loss_KD = torch.zeros(step).to(device)
-                
+
                 for t in range(step):
                     start = t * args.class_num_per_step
                     end = (t + 1) * args.class_num_per_step
@@ -198,9 +259,26 @@ def train(args, step, train_data_set, val_data_set):
                 # labels = labels.to(device)
                 ce_loss_value = CE_loss(args.class_num_per_step, out, labels)
     
-                loss = loss_KD + ce_loss_value
+                loss = ce_loss_value
+
+                set_epoch_start = 20 # 这个时间段
+                set_epoch_end = 50 # 这个时间段
+
+                kd_weight = min(1.0, max((epoch - set_epoch_start) / (set_epoch_end - set_epoch_start), 0.0))
+
+                if args.e_prompt:
+                    loss = loss - a_sim - v_sim
+                    if args.warm:
+                        loss += kd_weight * loss_KD
+                    else:
+                        loss += loss_KD
+                else:
+                    loss += loss_KD
+
             model.zero_grad()
             loss.backward()
+            '''Clip Gradient'''
+            total_norm = clip_grad_norm_(model.parameters(), 5.0)
             opt.step()
             train_loss += loss.item()
             num_steps += 1
@@ -234,9 +312,9 @@ def train(args, step, train_data_set, val_data_set):
                     val_visual = val_visual.to(device)
                     val_audio = val_audio.to(device)
                     if torch.cuda.device_count() > 1:
-                        val_out_logits = model.module.forward(visual=val_visual, audio=val_audio)
+                        val_out_logits = model.module.forward(visual=val_visual, audio=val_audio, is_train=False)
                     else:
-                        val_out_logits = model(visual=val_visual, audio=val_audio)
+                        val_out_logits = model(visual=val_visual, audio=val_audio, is_train=False)
                 val_out_logits = F.softmax(val_out_logits, dim=-1).detach().cpu()
                 all_val_out_logits = torch.cat((all_val_out_logits, val_out_logits), dim=0)
                 all_val_labels = torch.cat((all_val_labels, val_labels), dim=0)
@@ -248,20 +326,21 @@ def train(args, step, train_data_set, val_data_set):
             best_val_res = val_top1
             logger.info('Saving best model at Epoch {}'.format(epoch))
             if torch.cuda.device_count() > 1:
-                torch.save(model.module, './save/{}/{}/step_{}_best_{}_model.pkl'.format(args.dataset, args.modality, step, args.modality))
+                torch.save(model.module,
+                           os.path.join(ckpts_root, 'step_{}_best_{}_model.pkl'.format(step, args.modality)))
             else:
-                torch.save(model, './save/{}/{}/step_{}_best_{}_model.pkl'.format(args.dataset, args.modality, step, args.modality))
+                torch.save(model, os.path.join(ckpts_root, 'step_{}_best_{}_model.pkl'.format(step, args.modality)))
 
         plt.figure()
         plt.plot(range(len(train_loss_list)), train_loss_list, label='train_loss')
         plt.legend()
-        plt.savefig('./save/fig/{}/{}/{}_train_loss_step_{}.png'.format(args.dataset, args.modality, args.modality, step))
+        plt.savefig(os.path.join(figs_root, '{}_train_loss_step_{}.png'.format(args.modality, step)))
         plt.close()
 
         plt.figure()
         plt.plot(range(len(val_acc_list)), val_acc_list, label='val_acc')
         plt.legend()
-        plt.savefig('./save/fig/{}/{}/{}_val_acc_step_{}.png'.format(args.dataset, args.modality, args.modality, step))
+        plt.savefig(os.path.join(figs_root, '{}_val_acc_step_{}.png'.format(args.modality, step)))
         plt.close()
 
 
@@ -274,7 +353,8 @@ def detailed_test(args, step, test_data_set, task_best_acc_list):
     logger.info("Start testing...")
     logger.info("=====================================")
 
-    model = torch.load('./save/{}/{}/step_{}_best_{}_model.pkl'.format(args.dataset, args.modality, step, args.modality))
+    model = torch.load(os.path.join(ckpts_root, 'step_{}_best_{}_model.pkl'.format(step, args.modality)))
+
     model.to(device)
 
     test_loader = DataLoader(test_data_set, batch_size=args.infer_batch_size, num_workers=args.num_workers,
@@ -299,7 +379,7 @@ def detailed_test(args, step, test_data_set, task_best_acc_list):
                 test_audio = test_data[1]
                 test_visual = test_visual.to(device)
                 test_audio = test_audio.to(device)
-                test_out_logits = model(visual=test_visual, audio=test_audio)
+                test_out_logits = model(visual=test_visual, audio=test_audio, is_train=False)
             test_out_logits = F.softmax(test_out_logits, dim=-1).detach().cpu()
             all_test_out_logits = torch.cat((all_test_out_logits, test_out_logits), dim=0)
             all_test_labels = torch.cat((all_test_labels, test_labels), dim=0)
@@ -358,21 +438,13 @@ if __name__ == "__main__":
 
     step_accuracy_list = []
 
-    ckpts_root = './save/{}/{}/'.format(args.dataset, args.modality)
-    figs_root = './save/fig/{}/{}/'.format(args.dataset, args.modality)
-
-    if not os.path.exists(ckpts_root):
-        os.makedirs(ckpts_root)
-    if not os.path.exists(figs_root):
-        os.makedirs(figs_root)
-
     for step in range(total_incremental_steps):
         train_set.set_incremental_step(step)
         val_set.set_incremental_step(step)
         test_set.set_incremental_step(step)
 
         logger.info('Incremental step: {}'.format(step))
-        train(args, step, train_set, val_set)
+        # train(args, step, train_set, val_set)
         step_accuracy, step_forgetting = detailed_test(args, step, test_set, task_best_acc_list)
         step_accuracy_list.append(step_accuracy)
         if step_forgetting is not None:

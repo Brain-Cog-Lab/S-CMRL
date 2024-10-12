@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torch.nn import MultiheadAttention
 from torch.nn import Dropout
 from torch.nn import LayerNorm
+from .layers import EncoderLayer, Encoder, DecoderLayer, Decoder
+
 
 class Prompt_Attention(nn.Module):
     def __init__(self, dim, prompt_dim, nhead=4, dropout=0.1):
@@ -43,12 +45,12 @@ class Prompt_Attention(nn.Module):
         specific_memory = torch.cat([prompt, memory], dim=1)
         specific_memory = self.proj2(F.relu(self.proj1(specific_memory)))
 
-        res = self.multihead_attn(src, specific_memory, memory)[0]
+        output = self.multihead_attn(src, specific_memory, memory)[0]
 
-        # Add & Norm
-        output = memory + self.dropout1(res)
-        output = self.norm1(output)
-
+        # # Add & Norm
+        # output = memory + self.dropout1(res)
+        # output = self.norm1(output)
+        #
         ## Feed Forward
         output2 = self.linear2(self.FF_dropout(F.relu(self.linear1(output))))
         output = output + self.dropout2(output2)
@@ -97,3 +99,39 @@ class CrossModalAttention(nn.Module):
         combined_features = weighted_visual + weighted_audio
 
         return combined_features
+
+
+
+class InternalTemporalRelationModule(nn.Module):
+    def __init__(self, input_dim, d_model, feedforward_dim):
+        super(InternalTemporalRelationModule, self).__init__()
+        self.encoder_layer = EncoderLayer(d_model=d_model, nhead=4, dim_feedforward=feedforward_dim)
+        self.encoder = Encoder(self.encoder_layer, num_layers=2)
+
+        self.affine_matrix = nn.Linear(input_dim, d_model)
+        self.relu = nn.ReLU(inplace=True)
+        # add relu here?
+
+    def forward(self, feature):
+        # feature: [seq_len, batch, dim]
+        feature = self.affine_matrix(feature)
+        feature = self.encoder(feature)
+
+        return feature
+
+
+class CrossModalRelationAttModule(nn.Module):
+    def __init__(self, input_dim, d_model, feedforward_dim):
+        super(CrossModalRelationAttModule, self).__init__()
+
+        self.decoder_layer = DecoderLayer(d_model=d_model, nhead=4, dim_feedforward=feedforward_dim)
+        self.decoder = Decoder(self.decoder_layer, num_layers=1)
+
+        self.affine_matrix = nn.Linear(input_dim, d_model)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, query_feature, memory_feature):
+        query_feature = self.affine_matrix(query_feature)
+        output = self.decoder(query_feature, memory_feature)
+
+        return output

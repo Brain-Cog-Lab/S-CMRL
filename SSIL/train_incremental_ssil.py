@@ -538,7 +538,7 @@ if __name__ == "__main__":
         logger.info("***************New Step***************************")
         logger.info('Incremental step: {}'.format(step))
 
-        # train(args, step, train_set, val_set, exemplar_set)
+        train(args, step, train_set, val_set, exemplar_set)
         step_accuracy, step_forgetting = detailed_test(args, step, test_set, task_best_acc_list)
         step_accuracy_list.append(step_accuracy)
         if step_forgetting is not None:

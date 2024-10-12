@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .layers import LSCLinear, SplitLSCLinear
 from .prompt import EPrompt
-from .attention import Prompt_Attention, BilinearPooling, CrossModalAttention
+from .attention import Prompt_Attention, BilinearPooling, CrossModalAttention, InternalTemporalRelationModule, CrossModalRelationAttModule
+
 
 class IncreAudioVisualNet(nn.Module):
     def __init__(self, args, step_out_class_num, LSC=False):
@@ -36,6 +37,11 @@ class IncreAudioVisualNet(nn.Module):
             self.a_prompt_attention = Prompt_Attention(dim=768, prompt_dim=args.prompt_dim)
             self.v_prompt_attention = Prompt_Attention(dim=768, prompt_dim=args.prompt_dim)
             self.av_cue_fusion = CrossModalAttention(768, 768, 768)
+
+            self.visual_encoder = InternalTemporalRelationModule(input_dim=768, d_model=768, feedforward_dim=1024)  # self.video_fc_dim
+            self.visual_decoder = CrossModalRelationAttModule(input_dim=768, d_model=768, feedforward_dim=512)
+            self.audio_encoder = InternalTemporalRelationModule(input_dim=768, d_model=768, feedforward_dim=1024)  # self.video_fc_dim
+            self.audio_decoder = CrossModalRelationAttModule(input_dim=768, d_model=768, feedforward_dim=512)
     
     def forward(self, visual=None, audio=None, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False, is_train=True, task_id=0, task_ids_for_kl=None):
         if self.modality == 'visual':
@@ -89,32 +95,45 @@ class IncreAudioVisualNet(nn.Module):
             visual_pooled_feature = torch.sum(spatial_attn_score * visual, dim=2)
             visual_pooled_feature = torch.sum(temporal_attn_score * visual_pooled_feature, dim=1)
 
-            audio_feature = audio
-            visual_feature = visual_pooled_feature
-
             # 这里是新加的对e_prompt的操作
             if self.use_e_prompt:
                 if is_train:
-                    prompt_mask = task_id
+                    prompt_mask = task_id  # 当前的重新计算, 之前的用之前的
+
+                    visual_feature = torch.sum(F.softmax(visual, dim=2) * visual, dim=2)  # ikd
+                    visual_feature = torch.sum(F.softmax(visual_feature, dim=1) * visual_feature, dim=1)
+                    audio_feature = audio
+                    v_res = self.v_prompt(visual_feature, prompt_mask=prompt_mask, cls_features=visual_feature)  # 输入和查询的是一样的
+                    a_res = self.a_prompt(audio_feature, prompt_mask=prompt_mask, cls_features=audio_feature)  # 输入和查询的是一样的
+
+                    visual_feature = visual_feature.unsqueeze(1).transpose(1, 0).contiguous()  # (seq, batch, dim)
+                    audio_feature = audio.unsqueeze(1).transpose(1, 0).contiguous()  # (seq, batch, dim)
+
+                    # audio query
+                    visual_key_value_feature = self.visual_encoder(visual_feature)
+                    audio_query_output = self.audio_decoder(audio_feature, visual_key_value_feature).squeeze()  # (batch, dim)
+
+                    # video query
+                    audio_key_value_feature = self.audio_encoder(audio_feature)
+                    visual_query_output = self.visual_decoder(visual_feature, audio_key_value_feature).squeeze()  # (batch, dim)
+
+                    visual_feature = visual_feature.squeeze()  # (batch, dim)
+                    audio_feature = audio_feature.squeeze()  # (batch, dim)
+
+                    self.v_prompt.prompt[0] = audio_query_output.max(dim=0)[0]
+
+                    cross_visual_feature = visual_feature + self.v_prompt.prompt[0]
+
+                    self.a_prompt.prompt[0] = visual_query_output.max(dim=0)[0]
+
+                    cross_audio_feature = audio_feature + self.a_prompt.prompt[0]
+                    # cross_audio_feature = audio_feature
+
+                    audio_visual_features = self.av_cue_fusion(cross_audio_feature, cross_visual_feature)
+
                 else:
                     prompt_mask = None
 
-                v_res = self.v_prompt(visual_feature, prompt_mask=prompt_mask, cls_features=visual_feature) # 输入和查询的是一样的
-                v_prompt = v_res['batched_prompt']
-
-                cross_visual_feature = self.v_prompt_attention(audio_feature, visual_feature, v_prompt)
-                # cross_visual_feature = visual_feature
-
-                a_res = self.a_prompt(audio_feature, prompt_mask=prompt_mask, cls_features=audio_feature) # 输入和查询的是一样的
-                a_prompt = a_res['batched_prompt']
-
-                cross_audio_feature = self.a_prompt_attention(visual_feature, audio_feature, a_prompt)
-                # cross_audio_feature = audio_feature
-
-                audio_visual_features = self.av_cue_fusion(cross_audio_feature, cross_visual_feature)
-                # cross_visual_feature = F.relu(self.visual_proj(cross_visual_feature))
-                # cross_audio_feature = F.relu(self.audio_proj(cross_audio_feature))
-                # audio_visual_features = cross_visual_feature + cross_audio_feature
 
                 if task_ids_for_kl is not None:
                     prompt_mask = task_ids_for_kl
