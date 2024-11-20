@@ -5,6 +5,85 @@ Here is the PyTorch implementation of our paper. （Prompt middle version）
 
 
 
+### Continual Learning
+
+##### 1. UrbanSound8K
+
+```
+CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model spikformer --dataset UrbanSound8K --epoch 50 --batch-size 32 --num-classes 10 --step 4 --modality audio
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=1 python train_snn_cl.py --model spikformer --dataset UrbanSound8K --epoch 50 --batch-size 32 --num-classes 10 --step 4 --modality visual
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=2 python train_snn_cl.py --model AVspikformer --dataset UrbanSound8K --epoch 50 --batch-size 32 --num-classes 10 --step 4 --modality audio-visual
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=3 python train_snn_cl.py --model AVspikformer --dataset UrbanSound8K --epoch 50 --batch-size 32 --num-classes 10 --step 4 --modality audio-visual --cross-attn
+```
+
+
+
+##### 2. AVmnistdvs
+
+```
+CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model spikformer --dataset AVmnistdvs --epoch 20 --batch-size 32 --num-classes 10 --step 4 --modality audio --shallow-sps --event-size 28
+```
+
+
+
+```\
+CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model spikformer --dataset AVmnistdvs --epoch 20 --batch-size 32 --num-classes 10 --step 4 --modality visual --shallow-sps --event-size 28
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model AVspikformer --dataset AVmnistdvs --epoch 20 --batch-size 32 --num-classes 10 --step 4 --modality audio-visual --shallow-sps --event-size 28
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model AVspikformer --dataset AVmnistdvs --epoch 20 --batch-size 32 --num-classes 10 --step 4 --modality audio-visual --shallow-sps --event-size 28 --cross-attn
+```
+
+
+
+##### 3. AvCifar10
+
+```
+CUDA_VISIBLE_DEVICES=5 python train_snn_cl.py --model spikformer --dataset AvCifar10 --epoch 30 --batch-size 64 --num-classes 10 --step 4 --modality visual --shallow-sps --event-size 32
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=5 python train_snn_cl.py --model spikformer --dataset AvCifar10 --epoch 30 --batch-size 64 --num-classes 10 --step 4 --modality audio --shallow-sps --event-size 32
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=4 python train_snn_cl.py --model AVspikformer --dataset AvCifar10 --epoch 30 --batch-size 64 --num-classes 10 --step 4 --modality audio-visual --shallow-sps --event-size 32
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=5 python train_snn_cl.py --model AVspikformer --dataset AvCifar10 --epoch 30 --batch-size 64 --num-classes 10 --step 4 --modality audio-visual --shallow-sps --event-size 32 --cross-attn
+```
+
+
 
 
 
