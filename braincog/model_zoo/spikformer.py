@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from collections import OrderedDict
 from timm.models.layers import to_2tuple, trunc_normal_, DropPath
 from timm.models.registry import register_model
 from timm.models.vision_transformer import _cfg
@@ -394,6 +395,43 @@ def spikformer(pretrained=False, **kwargs):
 
 
 # ------------------------------------------以下是audio-visual的部分------------
+class AVattention(nn.Module):
+    def __init__(self, channel=512, reduction=16, group=1, L=32):
+        super().__init__()
+        self.d = max(L, channel // reduction)
+        self.fc = nn.Linear(channel, self.d)
+        self.fcs = nn.ModuleList([])
+        for i in range(2):
+            self.fcs.append(nn.Linear(self.d, channel))
+        self.softmax = nn.Softmax(dim=0)
+
+    def forward(self, x, y):
+        """
+            x, y: [T, B, C]
+            return [T, B, C]
+        """
+
+        t, b, c= x.size()
+
+        ### fuse
+        U = x + y
+
+        ### reduction channel
+        Z = self.fc(U)  # T, B, d
+
+        ### calculate attention weight
+        weights = []
+        for fc in self.fcs:
+            weight = fc(Z)
+            weights.append(weight.view(t, b, c))  # t, b, c
+        attention_weights = torch.stack(weights, 0)  # k,t,b,c
+        attention_weights = self.softmax(attention_weights)  # k,t,bs,channel
+
+        ### fuse
+        V = attention_weights[0] * x + attention_weights[1] * y
+        return V
+
+
 class AudioVisualSSA(BaseModule):
     def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
                  drop=0., attn_drop=0.,
@@ -497,6 +535,7 @@ class AudioVisualSpikformer(nn.Module):
         self.depths = depths
         in_channels = kwargs['in_channels'] if 'in_channels' in kwargs else 2
         self.cross_attn = kwargs['cross_attn'] if 'cross_attn' in kwargs else False
+        self.av_attn = kwargs['av_attn'] if 'av_attn' in kwargs else False
         shallow_sps = kwargs['shallow_sps'] if 'shallow_sps' in kwargs else False
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depths)]  # stochastic depth decay rule
@@ -541,9 +580,12 @@ class AudioVisualSpikformer(nn.Module):
 
                                for j in range(depths)])
 
+        av_attention = AVattention(channel=embed_dims)
+
         setattr(self, f"audio_patch_embed", audio_patch_embed)
         setattr(self, f"visual_patch_embed", visual_patch_embed)
         setattr(self, f"block", block)
+        setattr(self, f"av_attention", av_attention)
 
         # classification head
         self.head = nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity()
@@ -569,6 +611,7 @@ class AudioVisualSpikformer(nn.Module):
 
     def forward_features(self, audio, visual):
 
+        av_attention = getattr(self, f"av_attention")
         block = getattr(self, f"block")
         audio_patch_embed = getattr(self, f"audio_patch_embed")
         visual_patch_embed = getattr(self, f"visual_patch_embed")
@@ -583,16 +626,22 @@ class AudioVisualSpikformer(nn.Module):
             audio_feature = audio
             visual_feature = visual
 
-        fused_feature = audio_feature + visual_feature
-        return fused_feature.mean(3)
+        audio_feature = audio_feature.mean(-1)  # T B C N -> T B C
+        visual_feature = visual_feature.mean(-1)  # T B C N -> T B C
+
+        if self.av_attn:
+            fused_feature = av_attention(audio_feature, visual_feature)
+        else:
+            fused_feature = audio_feature + visual_feature  # T B C N
+        return fused_feature, audio_feature, visual_feature
 
     def forward(self, x):
         audio, visual = x  # B T C H W
         audio = audio.permute(1, 0, 2, 3, 4)
         visual = visual.permute(1, 0, 2, 3, 4)
-        x = self.forward_features(audio, visual)  # T B C N
+        x, audio_feature, visual_feature = self.forward_features(audio, visual)  # T B C N
         x = self.head(x.mean(0))
-        return x
+        return x, audio_feature, visual_feature
 
     def incremental_classifier(self, numclass):
         weight = self.head.weight.data

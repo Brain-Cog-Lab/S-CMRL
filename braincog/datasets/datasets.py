@@ -41,8 +41,8 @@ DVSCIFAR10_MEAN_16 = [0.3290, 0.4507]
 DVSCIFAR10_STD_16 = [1.8398, 1.6549]
 
 # DATA_DIR = '/mnt/home/hexiang/datasets/'
-# DATA_DIR = '/mnt/data/datasets/'
-DATA_DIR = '/home/hexiang/data/'
+DATA_DIR = '/mnt/data/datasets/'
+# DATA_DIR = '/home/hexiang/data/'
 
 DEFAULT_CROP_PCT = 0.875
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
@@ -802,13 +802,13 @@ def get_AVmnistdvs_CL_data(batch_size, step, dvs_da=False, **kwargs):
     train_loader = torch.utils.data.DataLoader(
         visual_train_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-        pin_memory=True, drop_last=True, num_workers=8
+        pin_memory=True, drop_last=True, num_workers=0
     )
 
     test_loader = torch.utils.data.DataLoader(
         visual_test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-        pin_memory=True, drop_last=False, num_workers=8
+        pin_memory=True, drop_last=False, num_workers=0
     )
 
     if modality == "visual":
@@ -889,13 +889,13 @@ def get_AVmnistdvs_CL_data(batch_size, step, dvs_da=False, **kwargs):
     train_loader = torch.utils.data.DataLoader(
         audio_train_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-        pin_memory=True, drop_last=True, num_workers=8
+        pin_memory=True, drop_last=True, num_workers=0
     )
 
     test_loader = torch.utils.data.DataLoader(
         audio_test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-        pin_memory=True, drop_last=False, num_workers=8
+        pin_memory=True, drop_last=False, num_workers=0
     )
 
     if modality == "audio":
@@ -928,13 +928,13 @@ def get_AVmnistdvs_CL_data(batch_size, step, dvs_da=False, **kwargs):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-        pin_memory=True, drop_last=True, num_workers=8
+        pin_memory=True, drop_last=True, num_workers=0
     )
 
     test_loader = torch.utils.data.DataLoader(
         test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-        pin_memory=True, drop_last=False, num_workers=8
+        pin_memory=True, drop_last=False, num_workers=0
     )
 
     if modality == "audio-visual":
@@ -1005,7 +1005,7 @@ def get_AVmnistdvs_CL_exemplar_data(batch_size, step, dvs_da=False, **kwargs):
         train_loader = torch.utils.data.DataLoader(
             visual_train_dataset, batch_size=batch_size,
             sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-            pin_memory=True, drop_last=True, num_workers=8
+            pin_memory=True, drop_last=True, num_workers=0
         )
 
         if modality == "visual":
@@ -1055,7 +1055,7 @@ def get_AVmnistdvs_CL_exemplar_data(batch_size, step, dvs_da=False, **kwargs):
         train_loader = torch.utils.data.DataLoader(
             audio_train_dataset, batch_size=batch_size,
             sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-            pin_memory=True, drop_last=True, num_workers=8
+            pin_memory=True, drop_last=True, num_workers=0
         )
 
         if modality == "audio":
@@ -1076,7 +1076,7 @@ def get_AVmnistdvs_CL_exemplar_data(batch_size, step, dvs_da=False, **kwargs):
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=batch_size,
             sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-            pin_memory=True, drop_last=True, num_workers=8
+            pin_memory=True, drop_last=True, num_workers=0
         )
 
         if modality == "audio-visual":

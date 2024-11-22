@@ -341,6 +341,8 @@ parser.add_argument('--modality', type=str, default='visual')
 parser.add_argument('--class_num_per_step', type=int, default=2)
 parser.add_argument('--memory_size', type=int, default=340)
 parser.add_argument('--cross-attn', action='store_true')
+parser.add_argument('--av-attn', action='store_true')
+
 parser.add_argument('--shallow-sps', action='store_true')
 
 
@@ -384,6 +386,24 @@ def CE_loss(num_classes, logits, label):
 
     return loss
 
+
+def class_contrastive_loss(feature_1, feature_2, label, temperature=0.01):
+    """
+        input shape: [T, B, C]
+    """
+    T, _, _ = feature_1.shape
+    loss = 0.
+    for t in range(T):
+        class_matrix = label.unsqueeze(0)
+        class_matrix = class_matrix.repeat(class_matrix.shape[1], 1)
+        class_matrix = class_matrix == label.unsqueeze(-1)
+        # (BS, BS)
+        class_matrix = class_matrix.float()
+        # (BS, BS)
+        score = torch.mm(feature_1[t], feature_2[t].transpose(0, 1)) / temperature
+        loss += -torch.mean(torch.mean(F.log_softmax(score, dim=-1) * class_matrix, dim=-1))
+    loss /= T
+    return loss
 
 def main(incremental_step, old_model, model, exemplar_loader_train, loader_train, loader_eval, output_dir):
     # flops, params = profile(model, inputs=(torch.randn(1, args.channels, args.event_size, args.event_size),), verbose=False)
@@ -692,8 +712,15 @@ def train_epoch(
                 else:
                     inputs, target = inputs.type(torch.FloatTensor).cuda(), target.cuda()
             with amp_autocast():
-                output = model(inputs)
+                if args.modality == "audio-visual":
+                    output, audio_feature, visual_feature = model(inputs)
+                else:
+                    output = model(inputs)
+
                 loss = loss_fn(output, target)
+                if args.cross_attn:
+                    loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, target)
+                    loss += loss_avAttn
 
             if not (args.cut_mix | args.mix_up | args.event_mix | (args.cutmix != 0.) | (args.mixup != 0.)):
                 # print(output.shape, target.shape)
@@ -725,11 +752,21 @@ def train_epoch(
                     inputs_old, target_old = inputs_old.type(torch.FloatTensor).cuda(), target_old.cuda()
                     inputs = torch.cat((inputs, inputs_old), dim=0)
             with amp_autocast():
-                output = model(inputs)
+                if args.modality == "audio-visual":
+                    output, audio_feature, visual_feature = model(inputs)
+                else:
+                    output = model(inputs)
                 with torch.no_grad():
-                    old_out = old_model(inputs).detach()
+                    if args.modality == "audio-visual":
+                        old_out, audio_feature, visual_feature = old_model(inputs)
+                        old_out = old_out.detach()
+                    else:
+                        old_out = old_model(inputs).detach()
                     last_step_out_class_num = incremental_step * args.class_num_per_step
                     old_out = old_out[:, :last_step_out_class_num]
+
+            if args.cross_attn:
+                all_labels = torch.cat((target, target_old))
 
             data_batch_size = target.shape[0]
             exemplar_data_batch_size = target_old.shape[0]
@@ -759,6 +796,11 @@ def train_epoch(
             loss_KD = loss_KD.sum()
 
             loss += loss_KD
+
+            if args.cross_attn:
+                loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, all_labels)
+                # loss_avAttn = class_contrastive_loss(audio_feature[:, :data_batch_size, :], visual_feature[:, :data_batch_size, :], all_labels)
+                loss += loss_avAttn
 
             if not (args.cut_mix | args.mix_up | args.event_mix | (args.cutmix != 0.) | (args.mixup != 0.)):
                 # print(output.shape, target.shape)
@@ -904,7 +946,11 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress,
                     model.set_requires_fp(True)
 
             with amp_autocast():
-                output = model(inputs)
+
+                if args.modality == "audio-visual":
+                    output, audio_feature, visual_feature = model(inputs)
+                else:
+                    output = model(inputs)
 
             if isinstance(output, (tuple, list)):
                 output = output[0]
@@ -1028,7 +1074,11 @@ def validate_incremental_step(args, model, loader, step, amp_autocast=suppress,
                     model.set_requires_fp(True)
 
             with amp_autocast():
-                output = model(inputs).detach().cpu()
+                if args.modality == "audio-visual":
+                    output, audio_feature, visual_feature = model(inputs)
+                    output = output.detach().cpu()
+                else:
+                    output = model(inputs).detach().cpu()
                 all_test_out_logits = torch.cat((all_test_out_logits, output), dim=0)
                 all_test_labels = torch.cat((all_test_labels, target.detach().cpu()), dim=0)
 
@@ -1075,6 +1125,7 @@ if __name__ == '__main__':
             args.dataset,
             args.modality,
             "cross-attn_{}".format(args.cross_attn),
+            "av-attn_{}".format(args.av_attn),
             args.node_type,
             str(args.step),
             args.suffix,
@@ -1196,7 +1247,8 @@ if __name__ == '__main__':
             conv_type=args.conv_type,
             in_channels=args.channels,
             shallow_sps=args.shallow_sps,
-            cross_attn = args.cross_attn
+            cross_attn = args.cross_attn,
+            av_attn = args.av_attn
         )
 
         old_model = None
