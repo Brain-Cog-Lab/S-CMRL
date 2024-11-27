@@ -253,9 +253,9 @@ parser.add_argument('--pin-mem', action='store_true', default=False,
                     help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
 parser.add_argument('--no-prefetcher', action='store_true', default=False,
                     help='disable fast prefetcher')
-parser.add_argument('--output', default='./runs', type=str, metavar='PATH',
+parser.add_argument('--output', default='./runs_new', type=str, metavar='PATH',
                     help='path to output folder (default: none, current dir)')
-parser.add_argument('--tensorboard-dir', default='./runs', type=str)
+parser.add_argument('--tensorboard-dir', default='./runs_new', type=str)
 parser.add_argument('--eval-metric', default='top1', type=str, metavar='EVAL_METRIC',
                     help='Best metric (default: "top1"')
 parser.add_argument('--tta', type=int, default=0, metavar='N',
@@ -342,9 +342,11 @@ parser.add_argument('--class_num_per_step', type=int, default=2)
 parser.add_argument('--memory_size', type=int, default=340)
 parser.add_argument('--cross-attn', action='store_true')
 parser.add_argument('--av-attn', action='store_true')
+parser.add_argument('--contrastive', action='store_true')
 
 parser.add_argument('--shallow-sps', action='store_true')
 
+parser.add_argument('--temperature', type=float, default=0.1)
 
 try:
     from apex import amp
@@ -380,14 +382,42 @@ def _parse_args():
     return args, args_text
 
 
-def CE_loss(num_classes, logits, label):
-    targets = F.one_hot(label, num_classes=num_classes)
-    loss = -torch.mean(torch.sum(F.log_softmax(logits, dim=-1) * targets, dim=1))
+# def class_contrastive_loss(feature_1, feature_2, label, batch_size, temperature=0.01):
+#     """
+#         input shape: [T, B, C]
+#     """
+#
+#     # ------------part 1---------------#
+#     T, B, _ = feature_1.shape
+#     loss = 0.
+#     CE_loss = nn.CrossEntropyLoss()
+#
+#     for t in range(T):
+#         # (BS, BS)
+#         score = torch.mm(feature_1[t], feature_2[t].transpose(0, 1)) / temperature
+#         label = torch.arange(B).to(score.device)
+#         loss += CE_loss(score, label)
+#     loss /= T
+#
+#     # -----------part 2--------------#
+#     if batch_size is None:
+#         batch_size = B
+#     feature_1 = torch.mean(feature_1, dim=0)[:batch_size, :]
+#     feature_2 = torch.mean(feature_2, dim=0)[:batch_size, :]
+#     label = label[:batch_size]
+#
+#     class_matrix = label.unsqueeze(0)
+#     class_matrix = class_matrix.repeat(class_matrix.shape[1], 1)
+#     class_matrix = class_matrix == label.unsqueeze(-1)
+#     # (BS, BS)
+#     class_matrix = class_matrix.float()
+#     # (BS, BS)
+#     score = torch.mm(feature_1, feature_2.transpose(0, 1)) / temperature
+#     loss += -torch.mean(torch.mean(F.log_softmax(score, dim=-1) * class_matrix, dim=-1))
+#     return loss
 
-    return loss
 
-
-def class_contrastive_loss(feature_1, feature_2, label, temperature=0.01):
+def class_contrastive_loss(feature_1, feature_2, label, batch_size, temperature=0.01):
     """
         input shape: [T, B, C]
     """
@@ -404,6 +434,7 @@ def class_contrastive_loss(feature_1, feature_2, label, temperature=0.01):
         loss += -torch.mean(torch.mean(F.log_softmax(score, dim=-1) * class_matrix, dim=-1))
     loss /= T
     return loss
+
 
 def main(incremental_step, old_model, model, exemplar_loader_train, loader_train, loader_eval, output_dir):
     # flops, params = profile(model, inputs=(torch.randn(1, args.channels, args.event_size, args.event_size),), verbose=False)
@@ -718,8 +749,8 @@ def train_epoch(
                     output = model(inputs)
 
                 loss = loss_fn(output, target)
-                if args.cross_attn:
-                    loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, target)
+                if args.contrastive:
+                    loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, target, None ,temperature=args.temperature)
                     loss += loss_avAttn
 
             if not (args.cut_mix | args.mix_up | args.event_mix | (args.cutmix != 0.) | (args.mixup != 0.)):
@@ -797,9 +828,8 @@ def train_epoch(
 
             loss += loss_KD
 
-            if args.cross_attn:
-                loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, all_labels)
-                # loss_avAttn = class_contrastive_loss(audio_feature[:, :data_batch_size, :], visual_feature[:, :data_batch_size, :], all_labels)
+            if args.contrastive:
+                loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, all_labels, data_batch_size, temperature=args.temperature)
                 loss += loss_avAttn
 
             if not (args.cut_mix | args.mix_up | args.event_mix | (args.cutmix != 0.) | (args.mixup != 0.)):
@@ -1041,13 +1071,12 @@ def validate_incremental_step(args, model, loader, step, amp_autocast=suppress,
     top5_m = AverageMeter()
     spike_m = AverageMeter()
 
-    model.eval()
-
     end = time.time()
     last_idx = len(loader) - 1
     iters_per_epoch = len(loader)
 
     model.load_state_dict(torch.load(os.path.join(output_dir, "step_{}/model_best.pth.tar".format(incremental_step)), map_location='cpu')['state_dict'])
+    model.eval()
 
     all_test_out_logits = torch.Tensor([])
     all_test_labels = torch.Tensor([])
@@ -1125,7 +1154,9 @@ if __name__ == '__main__':
             args.dataset,
             args.modality,
             "cross-attn_{}".format(args.cross_attn),
+            "temperature_{}".format(args.temperature),
             "av-attn_{}".format(args.av_attn),
+            "contrastive-{}".format(args.contrastive),
             args.node_type,
             str(args.step),
             args.suffix,

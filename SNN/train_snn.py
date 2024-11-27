@@ -791,7 +791,7 @@ def train_epoch(
             if mixup_fn is not None:
                 inputs, target = mixup_fn(inputs, target)
         with amp_autocast():
-            output = model(inputs)
+            output, _, _ = model(inputs)
             loss = loss_fn(output, target)
         if args.tet_loss:
             output = output.mean(0)
@@ -939,7 +939,7 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress,
                     model.set_requires_fp(True)
 
             with amp_autocast():
-                output = model(inputs)
+                output, _, _ = model(inputs)
 
             if isinstance(output, (tuple, list)):
                 output = output[0]
