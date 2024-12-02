@@ -253,9 +253,9 @@ parser.add_argument('--pin-mem', action='store_true', default=False,
                     help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
 parser.add_argument('--no-prefetcher', action='store_true', default=False,
                     help='disable fast prefetcher')
-parser.add_argument('--output', default='./runs_new', type=str, metavar='PATH',
+parser.add_argument('--output', default='./runs_alpha', type=str, metavar='PATH',
                     help='path to output folder (default: none, current dir)')
-parser.add_argument('--tensorboard-dir', default='./runs_new', type=str)
+parser.add_argument('--tensorboard-dir', default='./runs_alpha', type=str)
 parser.add_argument('--eval-metric', default='top1', type=str, metavar='EVAL_METRIC',
                     help='Best metric (default: "top1"')
 parser.add_argument('--tta', type=int, default=0, metavar='N',
@@ -340,13 +340,17 @@ parser.add_argument('--modality', type=str, default='visual')
 # for CL
 parser.add_argument('--class_num_per_step', type=int, default=2)
 parser.add_argument('--memory_size', type=int, default=340)
+
+parser.add_argument('--embed_dims', type=int, default=256)
 parser.add_argument('--cross-attn', action='store_true')
+parser.add_argument('--attn-method', default='Spatial', type=str,
+                    choices=['Spatial', 'Temporal', 'SpatialTemporal'])
 parser.add_argument('--av-attn', action='store_true')
 parser.add_argument('--contrastive', action='store_true')
-
 parser.add_argument('--shallow-sps', action='store_true')
-
 parser.add_argument('--temperature', type=float, default=0.1)
+parser.add_argument('--alpha', type=float, default=0.1)
+
 
 try:
     from apex import amp
@@ -729,7 +733,7 @@ def train_epoch(
     for batch_idx, samples in enumerate(loader):
         if incremental_step == 0:
             inputs, target = samples
-            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10":
+            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10" or args.dataset == "CREMAD":
                 if args.modality == "audio-visual":
                     inputs = tuple(repeat(item, 'b c w h -> b t c w h', t=args.step) for item in inputs)
                 else:
@@ -763,7 +767,7 @@ def train_epoch(
             curr, prev = samples
             inputs, target = curr
             inputs_old, target_old = prev
-            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10":
+            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10" or args.dataset == "CREMAD":
                 if args.modality == "audio-visual":
                     inputs = tuple(repeat(item, 'b c w h -> b t c w h', t=args.step) for item in inputs)
                     inputs_old = tuple(repeat(item, 'b c w h -> b t c w h', t=args.step) for item in inputs_old)
@@ -796,8 +800,7 @@ def train_epoch(
                     last_step_out_class_num = incremental_step * args.class_num_per_step
                     old_out = old_out[:, :last_step_out_class_num]
 
-            if args.cross_attn:
-                all_labels = torch.cat((target, target_old))
+            all_labels = torch.cat((target, target_old))
 
             data_batch_size = target.shape[0]
             exemplar_data_batch_size = target_old.shape[0]
@@ -957,7 +960,7 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress,
     with torch.no_grad():
 
         for batch_idx, (inputs, target) in enumerate(loader):
-            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10":
+            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10" or args.dataset == "CREMAD":
                 if args.modality == "audio-visual":
                     inputs = tuple(repeat(item, 'b c w h -> b t c w h', t=args.step) for item in inputs)
                 else:
@@ -1064,6 +1067,7 @@ def top_1_acc(logits, target):
 
 def validate_incremental_step(args, model, loader, step, amp_autocast=suppress,
              log_suffix='', visualize=False, spike_rate=False, tsne=False, conf_mat=False, summary_writer=None):
+
     batch_time_m = AverageMeter()
     losses_m = AverageMeter()
     # closses_m = AverageMeter()
@@ -1075,7 +1079,8 @@ def validate_incremental_step(args, model, loader, step, amp_autocast=suppress,
     last_idx = len(loader) - 1
     iters_per_epoch = len(loader)
 
-    model.load_state_dict(torch.load(os.path.join(output_dir, "step_{}/model_best.pth.tar".format(incremental_step)), map_location='cpu')['state_dict'])
+
+    model.load_state_dict(torch.load(os.path.join(output_dir, "step_{}/model_best.pth.tar".format(incremental_step)), map_location='cuda')['state_dict'])
     model.eval()
 
     all_test_out_logits = torch.Tensor([])
@@ -1084,7 +1089,7 @@ def validate_incremental_step(args, model, loader, step, amp_autocast=suppress,
     with torch.no_grad():
 
         for batch_idx, (inputs, target) in enumerate(loader):
-            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10":
+            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10" or args.dataset == "CREMAD":
                 if args.modality == "audio-visual":
                     inputs = tuple(repeat(item, 'b c w h -> b t c w h', t=args.step) for item in inputs)
                 else:
@@ -1107,7 +1112,8 @@ def validate_incremental_step(args, model, loader, step, amp_autocast=suppress,
                     output, audio_feature, visual_feature = model(inputs)
                     output = output.detach().cpu()
                 else:
-                    output = model(inputs).detach().cpu()
+                    output = model(inputs)
+                    output = output.detach().cpu()
                 all_test_out_logits = torch.cat((all_test_out_logits, output), dim=0)
                 all_test_labels = torch.cat((all_test_labels, target.detach().cpu()), dim=0)
 
@@ -1156,6 +1162,8 @@ if __name__ == '__main__':
             "cross-attn_{}".format(args.cross_attn),
             "temperature_{}".format(args.temperature),
             "av-attn_{}".format(args.av_attn),
+            "attn-method_{}".format(args.attn_method),
+            "alpha_{}".format(args.alpha),
             "contrastive-{}".format(args.contrastive),
             args.node_type,
             str(args.step),
@@ -1277,9 +1285,12 @@ if __name__ == '__main__':
             sew_cnf=args.sew_cnf,
             conv_type=args.conv_type,
             in_channels=args.channels,
+            embed_dims=args.embed_dims,
             shallow_sps=args.shallow_sps,
             cross_attn = args.cross_attn,
-            av_attn = args.av_attn
+            av_attn = args.av_attn,
+            attn_method = args.attn_method,
+            alpha=args.alpha,
         )
 
         old_model = None

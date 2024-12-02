@@ -41,8 +41,8 @@ DVSCIFAR10_MEAN_16 = [0.3290, 0.4507]
 DVSCIFAR10_STD_16 = [1.8398, 1.6549]
 
 # DATA_DIR = '/mnt/home/hexiang/datasets/'
-DATA_DIR = '/mnt/data/datasets/'
-# DATA_DIR = '/home/hexiang/data/'
+# DATA_DIR = '/mnt/data/datasets/'
+DATA_DIR = '/home/hexiang/data/'
 
 DEFAULT_CROP_PCT = 0.875
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
@@ -636,7 +636,7 @@ def get_UrbanSound8K_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_
 
     test_loader = torch.utils.data.DataLoader(
         test_dataset, batch_size=batch_size,
-        sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
+        sampler=torch.utils.data.sampler.SequentialSampler(indices_test),
         pin_memory=True, drop_last=False, num_workers=8
     )
 
@@ -650,7 +650,7 @@ def get_UrbanSound8K_CL_exemplar_data(batch_size, num_workers=8, same_da=False,r
     :param kwargs:
     :return: (train loader, test loader, mixup_active, mixup_fn)
     """
-    size = 128
+    size = 64
     portion = 0.7
     modality = kwargs['modality']
     incremental_step = kwargs['incremental_step']
@@ -690,7 +690,6 @@ def get_UrbanSound8K_CL_exemplar_data(batch_size, num_workers=8, same_da=False,r
 
     # 创建数据集实例，传入不同的transform
     train_dataset = UrbanSound8KDataset(file_path, class_names, visual_transform=visual_train_transform, audio_transform=audio_train_transform, modality=modality)
-    test_dataset = UrbanSound8KDataset(file_path, class_names, visual_transform=visual_test_transform, audio_transform=audio_test_transform, modality=modality)
 
     # 按类别划分数据集
     indices_train_step = [[] for i in range(10)]
@@ -1094,77 +1093,6 @@ def get_AVmnistdvs_CL_exemplar_data(batch_size, step, dvs_da=False, **kwargs):
         return None, None, None, None
 
 
-# class AvCifar10Dataset(torch.utils.data.Dataset):
-#     def __init__(self, file_path, class_names, modality, train, visual_transform=None, audio_transform=None):
-#         """
-#         Args:
-#             file_path (str): 数据集根目录路径
-#             class_names (list): 类别名称列表
-#             transform (callable, optional): 变换操作（如数据增强）
-#         """
-#         self.file_path = file_path
-#         self.class_names = class_names
-#         self.visual_transform = visual_transform
-#         self.audio_transform = audio_transform
-#         self.modality = modality
-#         self.train = train
-#         self.data = []
-#         self.targets = []
-#
-#         if self.train:
-#             self.file_path = os.path.join(self.file_path, "train/visual")
-#         else:
-#             self.file_path = os.path.join(self.file_path, "test/visual")
-#
-#         for path, dirs, files in os.walk(self.file_path):
-#             dirs.sort()
-#             for file in files:
-#                 if file.endswith("png"):
-#                     self.data.append(path + "/" + file)
-#                     label_number = class_names[os.path.basename(path)]
-#                     self.targets.append(label_number)
-#
-#     def __len__(self):
-#         return len(self.data)
-#
-#     def __getitem__(self, idx):
-#         file_path, label = self.data[idx], self.targets[idx]
-#
-#         visual_context = PIL.Image.open(file_path).convert("RGB")
-#         visual_context = self.visual_transform(visual_context)
-#
-#         ###    -------一种读取方法, same as LinYue Guo-----
-#         # waveform, sample_rate = torchaudio.load(file_path)
-#         # transform = torchaudio.transforms.MelSpectrogram(
-#         #     sample_rate=sample_rate,
-#         #     n_mels=64,
-#         #     f_max=8000
-#         # )
-#         # mel_spec = transform(waveform)
-#         # context = torchaudio.transforms.AmplitudeToDB()(mel_spec)  # (1, 64, 1921)
-#
-#         ### ----------------另一种读取方法---------------
-#         audio_file_path = file_path.replace("visual", "audio").replace(".png", ".wav")
-#
-#         waveform, sample_rate = torchaudio.load(audio_file_path, normalize=True)
-#         waveform = torchaudio.functional.resample(waveform, orig_freq=sample_rate, new_freq=22050)
-#         waveform = torch.clamp(waveform, -1, 1)
-#
-#         stft_transforms = torchaudio.transforms.Spectrogram(n_fft=512, hop_length=353, power=None, pad_mode='constant')
-#         spectrogram = stft_transforms(waveform)
-#         spectrogram = torch.log(torch.abs(spectrogram) + 1e-7)
-#
-#         audio_context = PIL.Image.fromarray(spectrogram.squeeze().numpy())  # (249, 257)
-#         audio_context = self.audio_transform(audio_context)
-#
-#         if self.modality == "visual":
-#             return visual_context, label
-#         elif self.modality == "audio":
-#             return audio_context, label
-#         elif self.modality == "audio-visual":
-#             return (audio_context, visual_context), label
-
-
 class AvCifar10Dataset(torch.utils.data.Dataset):
     def __init__(self, file_path, class_names, modality, train, visual_transform=None, audio_transform=None):
         """
@@ -1182,12 +1110,15 @@ class AvCifar10Dataset(torch.utils.data.Dataset):
         self.data = []
         self.targets = []
 
-        self.file_path = os.path.join(self.file_path, "audio_dataset")
+        if self.train:
+            self.file_path = os.path.join(self.file_path, "train/visual")
+        else:
+            self.file_path = os.path.join(self.file_path, "test/visual")
 
         for path, dirs, files in os.walk(self.file_path):
             dirs.sort()
             for file in files:
-                if file.endswith("wav"):
+                if file.endswith("png"):
                     self.data.append(path + "/" + file)
                     label_number = class_names[os.path.basename(path)]
                     self.targets.append(label_number)
@@ -1197,6 +1128,9 @@ class AvCifar10Dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         file_path, label = self.data[idx], self.targets[idx]
+
+        visual_context = PIL.Image.open(file_path).convert("RGB")
+        visual_context = self.visual_transform(visual_context)
 
         ###    -------一种读取方法, same as LinYue Guo-----
         # waveform, sample_rate = torchaudio.load(file_path)
@@ -1209,7 +1143,7 @@ class AvCifar10Dataset(torch.utils.data.Dataset):
         # context = torchaudio.transforms.AmplitudeToDB()(mel_spec)  # (1, 64, 1921)
 
         ### ----------------另一种读取方法---------------
-        audio_file_path = file_path
+        audio_file_path = file_path.replace("visual", "audio").replace(".png", ".wav")
 
         waveform, sample_rate = torchaudio.load(audio_file_path, normalize=True)
         waveform = torchaudio.functional.resample(waveform, orig_freq=sample_rate, new_freq=22050)
@@ -1222,13 +1156,17 @@ class AvCifar10Dataset(torch.utils.data.Dataset):
         audio_context = PIL.Image.fromarray(spectrogram.squeeze().numpy())  # (249, 257)
         audio_context = self.audio_transform(audio_context)
 
-
-        return audio_context, label
+        if self.modality == "visual":
+            return visual_context, label
+        elif self.modality == "audio":
+            return audio_context, label
+        elif self.modality == "audio-visual":
+            return (audio_context, visual_context), label
 
 
 def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR, **kwargs):
     """
-    获取UrbanSound8K数据
+    获取Cifar10-AV数据
     :param batch_size: batch size
     :param kwargs:
     :return: (train loader, test loader, mixup_active, mixup_fn)
@@ -1244,7 +1182,7 @@ def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR
         'dog': 5, 'frog': 6, 'horse': 7, 'ship':8, 'truck':9
     }
 
-    file_path = os.path.join(root, "cifar10av-datasets")
+    file_path = os.path.join(root, "cifar10av-datasets/processed_dataset")
 
     visual_train_transform = transforms.Compose([
         transforms.RandomCrop(size, padding=4),
@@ -1264,8 +1202,14 @@ def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR
         transforms.ToTensor(),
     ])
 
+    audio_test_transform = transforms.Compose([
+        transforms.Resize((size, size)),  # 将频谱图像调整到224x224
+        transforms.ToTensor(),
+    ])
+
     # 创建数据集实例，传入不同的transform
     train_dataset = AvCifar10Dataset(file_path, class_names, visual_transform=visual_train_transform, audio_transform=audio_train_transform, modality=modality, train=True)
+    test_dataset = AvCifar10Dataset(file_path, class_names, visual_transform=visual_test_transform, audio_transform=audio_test_transform, modality=modality, train=False)
 
     # 按类别划分数据集
     indices_train_step = [[] for i in range(10)]
@@ -1274,11 +1218,20 @@ def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR
     indices_test_step = [[] for i in range(10)]
     indices_test = []
 
+    # 统计每个类别的样本数
+    class_counts_train = [4200 for i in range(10)]
+    cnt_now_train = 0
+
+    class_counts_test = [1800 for i in range(10)]
+    cnt_now_test = 0
+
+    # 按比例划分训练集和测试集
     for i in range(10):
-        indices_train_step[i].extend(
-            list(range(i * 1000, round(i * 1000 + 1000 * 0.7))))
-        indices_test_step[i].extend(
-            list(range(round(i * 1000 + 1000 * 0.7), (i + 1) * 1000)))
+        indices_train_step[i] = list(range(cnt_now_train, round(cnt_now_train + class_counts_train[i])))
+        cnt_now_train += class_counts_train[i]
+
+        indices_test_step[i] = list(range(cnt_now_test, round(cnt_now_test + class_counts_test[i])))
+        cnt_now_test += class_counts_test[i]
 
 
     for i in range(incremental_step * args.class_num_per_step, (incremental_step+1) * args.class_num_per_step):
@@ -1286,6 +1239,14 @@ def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR
     for i in range(0, (incremental_step+1) * args.class_num_per_step):
         indices_test.extend(indices_test_step[i])
 
+
+    train_dataset = DiskCachedDataset(train_dataset,
+                                      cache_path=os.path.join(DATA_DIR, 'cifar10av-datasets/{}/train_cache_{}'.format(modality, args.step)),
+                                      transform=None, num_copies=3)
+
+    test_dataset = DiskCachedDataset(test_dataset,
+                                      cache_path=os.path.join(DATA_DIR, 'cifar10av-datasets/{}/test_cache_{}'.format(modality, args.step)),
+                                      transform=None, num_copies=3)
 
     # 使用SubsetRandomSampler来创建训练和测试的DataLoader
     train_loader = torch.utils.data.DataLoader(
@@ -1295,116 +1256,17 @@ def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR
     )
 
     test_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size,
+        test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
         pin_memory=True, drop_last=False, num_workers=8
     )
 
     return train_loader, test_loader, None, None
 
-# def get_AvCifar10_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR, **kwargs):
-#     """
-#     获取UrbanSound8K数据
-#     :param batch_size: batch size
-#     :param kwargs:
-#     :return: (train loader, test loader, mixup_active, mixup_fn)
-#     """
-#     size = 32
-#     modality = kwargs['modality']
-#     incremental_step = kwargs['incremental_step']
-#     args = kwargs['args']
-#
-#     # 数据集类别，从"air_conditioner"到"street_music"
-#     class_names = {
-#         'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4,
-#         'dog': 5, 'frog': 6, 'horse': 7, 'ship':8, 'truck':9
-#     }
-#
-#     file_path = os.path.join(root, "cifar10av-datasets/processed_dataset")
-#
-#     visual_train_transform = transforms.Compose([
-#         transforms.RandomCrop(size, padding=4),
-#         transforms.RandomHorizontalFlip(),
-#         transforms.ToTensor(),
-#         transforms.Normalize(mean=CIFAR10_DEFAULT_MEAN, std=CIFAR10_DEFAULT_STD),  # ImageNet标准化
-#     ])
-#
-#
-#     visual_test_transform = transforms.Compose([
-#         transforms.ToTensor(),
-#         transforms.Normalize(mean=CIFAR10_DEFAULT_MEAN, std=CIFAR10_DEFAULT_STD),
-#     ])
-#
-#     audio_train_transform = transforms.Compose([
-#         transforms.Resize((size, size)),  # 将频谱图像调整到224x224
-#         transforms.ToTensor(),
-#     ])
-#
-#     audio_test_transform = transforms.Compose([
-#         transforms.Resize((size, size)),  # 将频谱图像调整到224x224
-#         transforms.ToTensor(),
-#     ])
-#
-#     # 创建数据集实例，传入不同的transform
-#     train_dataset = AvCifar10Dataset(file_path, class_names, visual_transform=visual_train_transform, audio_transform=audio_train_transform, modality=modality, train=True)
-#     test_dataset = AvCifar10Dataset(file_path, class_names, visual_transform=visual_test_transform, audio_transform=audio_test_transform, modality=modality, train=False)
-#
-#     # 按类别划分数据集
-#     indices_train_step = [[] for i in range(10)]
-#     indices_train = []
-#
-#     indices_test_step = [[] for i in range(10)]
-#     indices_test = []
-#
-#     # 统计每个类别的样本数
-#     class_counts_train = [4200 for i in range(10)]
-#     cnt_now_train = 0
-#
-#     class_counts_test = [1800 for i in range(10)]
-#     cnt_now_test = 0
-#
-#     # 按比例划分训练集和测试集
-#     for i in range(10):
-#         indices_train_step[i] = list(range(cnt_now_train, round(cnt_now_train + class_counts_train[i])))
-#         cnt_now_train += class_counts_train[i]
-#
-#         indices_test_step[i] = list(range(cnt_now_test, round(cnt_now_test + class_counts_test[i])))
-#         cnt_now_test += class_counts_test[i]
-#
-#
-#     for i in range(incremental_step * args.class_num_per_step, (incremental_step+1) * args.class_num_per_step):
-#         indices_train.extend(indices_train_step[i])
-#     for i in range(0, (incremental_step+1) * args.class_num_per_step):
-#         indices_test.extend(indices_test_step[i])
-#
-#
-#     train_dataset = DiskCachedDataset(train_dataset,
-#                                       cache_path=os.path.join(DATA_DIR, 'cifar10av-datasets/{}/train_cache_{}'.format(modality, args.step)),
-#                                       transform=None, num_copies=3)
-#
-#     test_dataset = DiskCachedDataset(test_dataset,
-#                                       cache_path=os.path.join(DATA_DIR, 'cifar10av-datasets/{}/test_cache_{}'.format(modality, args.step)),
-#                                       transform=None, num_copies=3)
-#
-#     # 使用SubsetRandomSampler来创建训练和测试的DataLoader
-#     train_loader = torch.utils.data.DataLoader(
-#         train_dataset, batch_size=batch_size,
-#         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-#         pin_memory=True, drop_last=True, num_workers=8
-#     )
-#
-#     test_loader = torch.utils.data.DataLoader(
-#         test_dataset, batch_size=batch_size,
-#         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-#         pin_memory=True, drop_last=False, num_workers=8
-#     )
-#
-#     return train_loader, test_loader, None, None
-
 
 def get_AvCifar10_CL_exemplar_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR, **kwargs):
     """
-    获取UrbanSound8K数据
+    获取Cifar10-AV数据
     :param batch_size: batch size
     :param kwargs:
     :return: (train loader, test loader, mixup_active, mixup_fn)
@@ -1453,12 +1315,253 @@ def get_AvCifar10_CL_exemplar_data(batch_size, num_workers=8, same_da=False,root
     indices_train = []
 
     # 统计每个类别的样本数
-    class_counts_train = [5000 for i in range(10)]
+    class_counts_train = [4200 for i in range(10)]
     cnt_now_train = 0
 
 
     # 按比例划分训练集和测试集
     for i in range(10):
+        indices_train_step[i] = list(range(cnt_now_train, round(cnt_now_train + class_counts_train[i])))
+        cnt_now_train += class_counts_train[i]
+
+    if incremental_step > 0:
+        new_memory_classes = range((incremental_step - 1) * args.class_num_per_step, incremental_step * args.class_num_per_step)  # [0, 1, 2, 3]
+        exemplar_num_per_class = args.memory_size // (incremental_step * args.class_num_per_step)  # [200, 200, 200]
+
+        for i in new_memory_classes:
+            class_exemplar = random.sample(indices_train_step[i], exemplar_num_per_class)
+            indices_train.extend(class_exemplar)
+
+        # 使用SubsetRandomSampler来创建训练和测试的DataLoader
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=batch_size,
+            sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
+            pin_memory=True, drop_last=True, num_workers=8
+        )
+
+        return train_loader, None, None, None
+    else:
+        return None, None, None, None
+
+
+class CREMADDataset(torch.utils.data.Dataset):
+    def __init__(self, file_path, class_names, modality, train, visual_transform=None, audio_transform=None):
+        """
+        Args:
+            file_path (str): 数据集根目录路径
+            class_names (list): 类别名称列表
+            transform (callable, optional): 变换操作（如数据增强）
+        """
+        self.file_path = file_path
+        self.class_names = class_names
+        self.visual_transform = visual_transform
+        self.audio_transform = audio_transform
+        self.modality = modality
+        self.train = train
+        self.data = []
+        self.targets = []
+
+        if self.train:
+            self.file_path = os.path.join(self.file_path, "train/visual")
+        else:
+            self.file_path = os.path.join(self.file_path, "test/visual")
+
+        for path, dirs, files in os.walk(self.file_path):
+            dirs.sort()
+            for file in files:
+                if file.endswith("jpg"):
+                    self.data.append(path + "/" + file)
+                    label_number = class_names[os.path.basename(path)]
+                    self.targets.append(label_number)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        file_path, label = self.data[idx], self.targets[idx]
+
+        visual_context = PIL.Image.open(file_path).convert("RGB")
+        visual_context = self.visual_transform(visual_context)
+
+        ###    -------一种读取方法, same as LinYue Guo-----
+        # waveform, sample_rate = torchaudio.load(file_path)
+        # transform = torchaudio.transforms.MelSpectrogram(
+        #     sample_rate=sample_rate,
+        #     n_mels=64,
+        #     f_max=8000
+        # )
+        # mel_spec = transform(waveform)
+        # context = torchaudio.transforms.AmplitudeToDB()(mel_spec)  # (1, 64, 1921)
+
+        ### ----------------另一种读取方法---------------
+        audio_file_path = file_path.replace("visual", "audio").replace(".jpg", ".wav")
+
+        waveform, sample_rate = torchaudio.load(audio_file_path, normalize=True)
+        waveform = torchaudio.functional.resample(waveform, orig_freq=sample_rate, new_freq=22050)
+        waveform = torch.clamp(waveform, -1, 1)
+
+        stft_transforms = torchaudio.transforms.Spectrogram(n_fft=512, hop_length=353, power=None, pad_mode='constant')
+        spectrogram = stft_transforms(waveform)
+        spectrogram = torch.log(torch.abs(spectrogram) + 1e-7)
+
+        audio_context = PIL.Image.fromarray(spectrogram.squeeze().numpy())  # (249, 257)
+        audio_context = self.audio_transform(audio_context)
+
+        if self.modality == "visual":
+            return visual_context, label
+        elif self.modality == "audio":
+            return audio_context, label
+        elif self.modality == "audio-visual":
+            return (audio_context, visual_context), label
+
+
+def get_CREMAD_CL_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR, **kwargs):
+    """
+    获取CREMAD数据
+    :param batch_size: batch size
+    :param kwargs:
+    :return: (train loader, test loader, mixup_active, mixup_fn)
+    """
+    size = 128
+    modality = kwargs['modality']
+    incremental_step = kwargs['incremental_step']
+    args = kwargs['args']
+
+    # 数据集类别，从"air_conditioner"到"street_music"
+    class_names = {
+        'ANG': 0, 'DIS': 1, 'FEA': 2, 'HAP': 3, 'NEU': 4, 'SAD': 5
+    }
+
+    file_path = os.path.join(root, "CREMA-D/processed_dataset")
+
+    visual_train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(size),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet标准化
+    ])
+
+
+    visual_test_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(size),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+    audio_train_transform = transforms.Compose([
+        transforms.Resize((size, size)),  # 将频谱图像调整到224x224
+        transforms.ToTensor(),
+    ])
+
+    audio_test_transform = transforms.Compose([
+        transforms.Resize((size, size)),  # 将频谱图像调整到224x224
+        transforms.ToTensor(),
+    ])
+
+    # 创建数据集实例，传入不同的transform
+    train_dataset = CREMADDataset(file_path, class_names, visual_transform=visual_train_transform, audio_transform=audio_train_transform, modality=modality, train=True)
+    test_dataset = CREMADDataset(file_path, class_names, visual_transform=visual_test_transform, audio_transform=audio_test_transform, modality=modality, train=False)
+
+    # 按类别划分数据集
+    indices_train_step = [[] for i in range(6)]
+    indices_train = []
+
+    indices_test_step = [[] for i in range(6)]
+    indices_test = []
+
+    # 统计每个类别的样本数
+    class_counts_train = [1166, 1142, 1138, 1148, 973, 1131]
+    cnt_now_train = 0
+
+    class_counts_test = [105, 129, 133, 123, 114, 140]
+    cnt_now_test = 0
+
+    # 按比例划分训练集和测试集
+    for i in range(6):
+        indices_train_step[i] = list(range(cnt_now_train, round(cnt_now_train + class_counts_train[i])))
+        cnt_now_train += class_counts_train[i]
+
+        indices_test_step[i] = list(range(cnt_now_test, round(cnt_now_test + class_counts_test[i])))
+        cnt_now_test += class_counts_test[i]
+
+
+    for i in range(incremental_step * args.class_num_per_step, (incremental_step+1) * args.class_num_per_step):
+        indices_train.extend(indices_train_step[i])
+    for i in range(0, (incremental_step+1) * args.class_num_per_step):
+        indices_test.extend(indices_test_step[i])
+
+
+    train_dataset = DiskCachedDataset(train_dataset,
+                                      cache_path=os.path.join(DATA_DIR, 'CREMA-D/{}/train_cache_{}'.format(modality, args.step)),
+                                      transform=None, num_copies=3)
+
+    test_dataset = DiskCachedDataset(test_dataset,
+                                      cache_path=os.path.join(DATA_DIR, 'CREMA-D/{}/test_cache_{}'.format(modality, args.step)),
+                                      transform=None, num_copies=3)
+
+    # 使用SubsetRandomSampler来创建训练和测试的DataLoader
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size,
+        sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
+        pin_memory=True, drop_last=True, num_workers=8
+    )
+
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=batch_size,
+        sampler=torch.utils.data.sampler.SequentialSampler(indices_test),
+        pin_memory=True, drop_last=False, num_workers=8
+    )
+
+    return train_loader, test_loader, None, None
+
+
+def get_CREMAD_CL_exemplar_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR, **kwargs):
+    """
+    获取CREMAD数据
+    :param batch_size: batch size
+    :param kwargs:
+    :return: (train loader, test loader, mixup_active, mixup_fn)
+    """
+    size = 128
+    modality = kwargs['modality']
+    incremental_step = kwargs['incremental_step']
+    args = kwargs['args']
+
+    # 数据集类别，从"air_conditioner"到"street_music"
+    class_names = {
+        'ANG': 0, 'DIS': 1, 'FEA': 2, 'HAP': 3, 'NEU': 4, 'SAD': 5
+    }
+
+
+    file_path = os.path.join(root, "CREMA-D/processed_dataset")
+
+    visual_train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(size),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet标准化
+    ])
+
+
+    audio_train_transform = transforms.Compose([
+        transforms.Resize((size, size)),  # 将频谱图像调整到224x224
+        transforms.ToTensor(),
+    ])
+
+    # 创建数据集实例，传入不同的transform
+    train_dataset = CREMADDataset(file_path, class_names, visual_transform=visual_train_transform, audio_transform=audio_train_transform, modality=modality, train=True)
+
+    # 按类别划分数据集
+    indices_train_step = [[] for i in range(6)]
+    indices_train = []
+
+    # 统计每个类别的样本数
+    class_counts_train = [1166, 1142, 1138, 1148, 973, 1131]
+    cnt_now_train = 0
+
+    # 按比例划分训练集和测试集
+    for i in range(6):
         indices_train_step[i] = list(range(cnt_now_train, round(cnt_now_train + class_counts_train[i])))
         cnt_now_train += class_counts_train[i]
 

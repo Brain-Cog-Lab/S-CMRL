@@ -225,25 +225,10 @@ class ShallowSPS(BaseModule):
 
         self.if_UCF = if_UCF
 
-        self.proj_conv = nn.Conv2d(in_channels, embed_dims // 8, kernel_size=3, stride=1, padding=1, bias=False)
-        self.proj_bn = nn.BatchNorm2d(embed_dims // 8)
+        self.proj_conv = nn.Conv2d(in_channels, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
+        self.proj_bn = nn.BatchNorm2d(embed_dims)
         self.proj_lif = MyNode(step=step, tau=2.0)
         self.maxpool = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
-
-        self.proj_conv1 = nn.Conv2d(embed_dims // 8, embed_dims // 4, kernel_size=3, stride=1, padding=1, bias=False)
-        self.proj_bn1 = nn.BatchNorm2d(embed_dims // 4)
-        self.proj_lif1 = MyNode(step=step, tau=2.0)
-        self.maxpool1 = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
-
-        self.proj_conv2 = nn.Conv2d(embed_dims // 4, embed_dims // 2, kernel_size=3, stride=1, padding=1, bias=False)
-        self.proj_bn2 = nn.BatchNorm2d(embed_dims // 2)
-        self.proj_lif2 = MyNode(step=step, tau=2.0)
-        self.maxpool2 = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
-
-        self.proj_conv3 = nn.Conv2d(embed_dims // 2, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
-        self.proj_bn3 = nn.BatchNorm2d(embed_dims)
-        self.proj_lif3 = MyNode(step=step, tau=2.0)
-        self.maxpool3 = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
 
         self.rpe_conv = nn.Conv2d(embed_dims, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
         self.rpe_bn = nn.BatchNorm2d(embed_dims)
@@ -262,34 +247,19 @@ class ShallowSPS(BaseModule):
         x = self.proj_conv(x.flatten(0, 1))  # have some fire value
         x = self.proj_bn(x).reshape(T, B, -1, H, W).contiguous()
         x = self.proj_lif(x.flatten(0, 1)).contiguous()
-        # x = self.maxpool(x)
+        x = self.maxpool(x)
 
-        x = self.proj_conv1(x)
-        x = self.proj_bn1(x).reshape(T, B, -1, H, W).contiguous()
-        x = self.proj_lif1(x.flatten(0, 1)).contiguous()
-        # x = self.maxpool1(x)
-
-        x = self.proj_conv2(x)
-        x = self.proj_bn2(x).reshape(T, B, -1, H, W).contiguous()
-        x = self.proj_lif2(x.flatten(0, 1)).contiguous()
-        x = self.maxpool2(x)
-
-        x = self.proj_conv3(x)
-        x = self.proj_bn3(x).reshape(T, B, -1, H // 2, W // 2).contiguous()
-        x = self.proj_lif3(x.flatten(0, 1)).contiguous()
-        x = self.maxpool3(x)
-
-        x_rpe = self.rpe_bn(self.rpe_conv(x)).reshape(T, B, -1, H // 4, W // 4).contiguous()
+        x_rpe = self.rpe_bn(self.rpe_conv(x)).reshape(T, B, -1, H // 2, W // 2).contiguous()
         x_rpe = self.rpe_lif(x_rpe.flatten(0, 1)).contiguous()
         x = x + x_rpe
-        x = x.reshape(T, B, -1, (H // 4) * (W // 4)).contiguous()
+        x = x.reshape(T, B, -1, (H // 2) * (W // 2)).contiguous()
 
         return x  # T B C N
 
 class Spikformer(nn.Module):
     def __init__(self, step=10, TIM_alpha=0.5, if_UCF=False,
                  img_size_h=64, img_size_w=64, patch_size=16, num_classes=10,
-                 embed_dims=256, num_heads=16, mlp_ratios=4, qkv_bias=False, qk_scale=None,
+                 num_heads=16, mlp_ratios=4, qkv_bias=False, qk_scale=None,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
                  depths=1, sr_ratios=4, *args, **kwargs
                  ):
@@ -299,6 +269,7 @@ class Spikformer(nn.Module):
         self.depths = depths
         in_channels = kwargs['in_channels'] if 'in_channels' in kwargs else 2
         shallow_sps = kwargs['shallow_sps'] if 'shallow_sps' in kwargs else False
+        embed_dims = kwargs['embed_dims'] if 'embed_dims' in kwargs else 256
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depths)]  # stochastic depth decay rule
 
@@ -432,7 +403,7 @@ class AVattention(nn.Module):
         return V
 
 
-class AudioVisualSSA(BaseModule):
+class SpatialAudioVisualSSA(BaseModule):
     def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
                  drop=0., attn_drop=0.,
                  drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1):
@@ -503,32 +474,150 @@ class AudioVisualSSA(BaseModule):
         return x
 
 
+class TemporalAudioVisualSSA(BaseModule):
+    def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
+                 drop=0., attn_drop=0.,
+                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1):
+        super().__init__(step=10, encode_type='direct')
+        assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
+        self.dim = dim
+
+        self.num_heads = num_heads
+
+        self.in_channels = dim // num_heads
+
+        self.scale = 0.25
+
+        self.q_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.q_bn = nn.BatchNorm1d(dim)
+        self.q_lif = MyNode(step=step, tau=2.0)
+
+        self.k_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.k_bn = nn.BatchNorm1d(dim)
+        self.k_lif = MyNode(step=step, tau=2.0)
+
+        self.v_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.v_bn = nn.BatchNorm1d(dim)
+        self.v_lif = MyNode(step=step, tau=2.0)
+
+        self.attn_drop = nn.Dropout(0.2)
+        self.res_lif = MyNode(step=step, tau=2.0)
+        self.attn_lif = MyNode(step=step, tau=2.0, v_threshold=0.5, )
+
+        self.proj_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.proj_bn = nn.BatchNorm1d(dim)
+        self.proj_lif = MyNode(step=step, tau=2.0, )
+
+    def forward(self, x, y):
+        self.reset()
+
+        T, B, C, N = x.shape
+        x =  x.permute(3, 1, 2, 0)  # N, B, C , T
+
+        x_for_qkv = x.flatten(0, 1)
+        y_for_qkv = y.flatten(0, 1)
+
+        q_conv_out = self.q_conv(x_for_qkv)
+        q_conv_out = self.q_bn(q_conv_out).reshape(N, B, C, T).contiguous()
+        q_conv_out = self.q_lif(q_conv_out.flatten(0, 1)).reshape(N, B, C, T).transpose(-2, -1)
+        q = q_conv_out.reshape(N, B, T, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        k_conv_out = self.k_conv(y_for_qkv)
+        k_conv_out = self.k_bn(k_conv_out).reshape(N, B, C, T).contiguous()
+        k_conv_out = self.k_lif(k_conv_out.flatten(0, 1)).reshape(N, B, C, T).transpose(-2, -1)
+        k = k_conv_out.reshape(N, B, T, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        v_conv_out = self.v_conv(y_for_qkv)
+        v_conv_out = self.v_bn(v_conv_out).reshape(N, B, C, T).contiguous()
+        v_conv_out = self.v_lif(v_conv_out.flatten(0, 1)).reshape(N, B, C, T).transpose(-2, -1)
+        v = v_conv_out.reshape(N, B, T, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        # TIM on Q
+        # q = self.TIM(q)
+
+        # SSA
+        attn = (q @ k.transpose(-2, -1))
+        x = (attn @ v) * self.scale
+
+        x = x.transpose(3, 4).reshape(N, B, C, T).contiguous()
+        x = self.attn_lif(x.flatten(0, 1))
+        x = self.proj_lif(self.proj_bn(self.proj_conv(x))).reshape(N, B, C, T).permute(3, 1, 2, 0).contiguous()  # N, B, C, T -> T, B, C, N
+
+        return x
+
+
+class SpatialTemporalAudioVisualSSA(BaseModule):
+    def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
+                 drop=0., attn_drop=0.,
+                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1):
+        super().__init__(step=10, encode_type='direct')
+
+        self.spatial_attn = SpatialAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                        attn_drop=attn_drop, sr_ratio=sr_ratio)
+
+        self.temporal_attn = TemporalAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                        attn_drop=attn_drop, sr_ratio=sr_ratio)
+
+
+    def forward(self, x, y):
+        a = self.spatial_attn(x, y)
+        b = self.temporal_attn(x, y)
+
+        T, B, C, N = a.shape
+        a_reduced = a.mean(dim=3)  # Shape: (T, B, C)
+        b_reduced = b.mean(dim=0)  # Shape: (B, C, N)
+
+        a_expanded = a_reduced.unsqueeze(-1)  # Shape: (1, B, C, N)
+        a_expanded = a_expanded.expand(-1, -1, -1, N)  # Shape: (T, B, C, N)
+
+        b_expanded = b_reduced.unsqueeze(0)  # Shape: (1, B, C, N)
+        b_expanded = b_expanded.expand(T, -1, -1, -1)  # Shape: (T, B, C, N)
+
+        output = a_expanded * b_expanded
+        return output
+
+
 class AudioVisualBlock(nn.Module):
     def __init__(self, dim, num_heads, step=10, TIM_alpha=0.5, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0.,
                  attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1):
+                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1, attn_method='Spatial', alpha=1.0):
         super().__init__()
         self.norm1 = norm_layer(dim)
 
-        self.attn = AudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                        attn_drop=attn_drop, sr_ratio=sr_ratio)
+        if attn_method == "Spatial":
+            self.attn = SpatialAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                            attn_drop=attn_drop, sr_ratio=sr_ratio)
+        elif attn_method == "Temporal":
+            self.attn = TemporalAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                            attn_drop=attn_drop, sr_ratio=sr_ratio)
+        elif attn_method == "SpatialTemporal":
+            self.attn = SpatialTemporalAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                            attn_drop=attn_drop, sr_ratio=sr_ratio)
         self.norm2 = norm_layer(dim)
+
+        self.alpha = alpha
+
+    def forward(self, x, y):
+        x = x + self.attn(x, y) * self.alpha
+        return x
+
+class MLPBlock(nn.Module):
+    def __init__(self, dim, step=10, mlp_ratio=4., drop=0.):
+        super().__init__()
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = MLP(in_features=dim, step=step, hidden_features=mlp_hidden_dim, drop=drop)
 
-    def forward(self, x, y):
-        x = x + self.attn(x, y)
+    def forward(self, x):
         x = x + self.mlp(x)
         return x
-
 
 class AudioVisualSpikformer(nn.Module):
     def __init__(self, step=10, TIM_alpha=0.5, if_UCF=False,
                  img_size_h=64, img_size_w=64, patch_size=16, num_classes=10,
-                 embed_dims=256, num_heads=16, mlp_ratios=4, qkv_bias=False, qk_scale=None,
+                 num_heads=16, mlp_ratios=4, qkv_bias=False, qk_scale=None,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
                  depths=2, sr_ratios=4, *args, **kwargs
-                 ):
+                 ):  # embed_dims 默认是256
         super().__init__()
         self.T = step  # time step
         self.num_classes = num_classes
@@ -537,6 +626,9 @@ class AudioVisualSpikformer(nn.Module):
         self.cross_attn = kwargs['cross_attn'] if 'cross_attn' in kwargs else False
         self.av_attn = kwargs['av_attn'] if 'av_attn' in kwargs else False
         shallow_sps = kwargs['shallow_sps'] if 'shallow_sps' in kwargs else False
+        attn_method = kwargs['attn_method'] if 'attn_method' in kwargs else None
+        embed_dims = kwargs['embed_dims'] if 'embed_dims' in kwargs else 256
+        alpha = kwargs['alpha'] if 'alpha' in kwargs else 1.0
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depths)]  # stochastic depth decay rule
 
@@ -576,9 +668,12 @@ class AudioVisualSpikformer(nn.Module):
         block = nn.ModuleList([AudioVisualBlock(step=step, TIM_alpha=TIM_alpha,
                                      dim=embed_dims, num_heads=num_heads, mlp_ratio=mlp_ratios, qkv_bias=qkv_bias,
                                      qk_scale=qk_scale, drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[j],
-                                     norm_layer=norm_layer, sr_ratio=sr_ratios)
+                                     norm_layer=norm_layer, sr_ratio=sr_ratios, attn_method=attn_method, alpha=alpha)
 
                                for j in range(depths)])
+
+        mlp = nn.ModuleList([MLPBlock(dim=embed_dims, step=step, mlp_ratio=mlp_ratios, drop=drop_rate)
+            for j in range(depths)])
 
         av_attention = AVattention(channel=embed_dims)
 
@@ -586,6 +681,7 @@ class AudioVisualSpikformer(nn.Module):
         setattr(self, f"visual_patch_embed", visual_patch_embed)
         setattr(self, f"block", block)
         setattr(self, f"av_attention", av_attention)
+        setattr(self, f"mlp", mlp)
 
         # classification head
         self.head = nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity()
@@ -615,6 +711,7 @@ class AudioVisualSpikformer(nn.Module):
         block = getattr(self, f"block")
         audio_patch_embed = getattr(self, f"audio_patch_embed")
         visual_patch_embed = getattr(self, f"visual_patch_embed")
+        mlp = getattr(self, f"mlp")
 
         audio = audio_patch_embed(audio)
         visual = visual_patch_embed(visual)
@@ -625,6 +722,9 @@ class AudioVisualSpikformer(nn.Module):
         else:
             audio_feature = audio
             visual_feature = visual
+
+        audio_feature = mlp[0](audio_feature)
+        visual_feature = mlp[1](visual_feature)
 
         audio_feature = audio_feature.mean(-1)  # T B C N -> T B C
         visual_feature = visual_feature.mean(-1)  # T B C N -> T B C

@@ -99,6 +99,87 @@ CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model AVspikformer --dataset AVm
 
 
 
+##### 4. CREMAD
+
+```
+CUDA_VISIBLE_DEVICES=2 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 64 --num-classes 6 --step 4 --modality audio
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=2 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 64 --num-classes 6 --step 4 --modality audio-visual
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=2 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 64 --num-classes 6 --step 4 --modality audio-visual --cross-attn
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=2 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 64 --num-classes 6 --step 4 --modality audio-visual --cross-attn --av-attn
+```
+
+
+
+
+
+## Classification
+
+##### 4. CREMAD
+
+
+
+```
+CUDA_VISIBLE_DEVICES=0 python train_snn_cl.py --model spikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio --class_num_per_step 6
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=1 python train_snn_cl.py --model spikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality visual --class_num_per_step 6
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=2 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --class_num_per_step 6
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=3 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --class_num_per_step 6 --cross-attn --attn-method Spatial
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=4 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --class_num_per_step 6 --cross-attn --attn-method Temporal
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=5 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --class_num_per_step 6 --cross-attn --attn-method SpatialTemporal
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=6 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --class_num_per_step 6 --cross-attn --attn-method Spatial --av-attn
+```
+
+
+
+```
+CUDA_VISIBLE_DEVICES=7 python train_snn_cl.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --class_num_per_step 6 --cross-attn --attn-method SpatialTemporal --av-attn
+```
+
+
 
 
 
