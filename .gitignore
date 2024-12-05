@@ -2,5 +2,5 @@
 */save/*/
 model/pretrained/
 data/*/*_pretrained_feature/*feature*
-test.py
+split_cifar10av.py
 */*.log

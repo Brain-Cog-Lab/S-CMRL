@@ -342,10 +342,13 @@ parser.add_argument('--class_num_per_step', type=int, default=2)
 parser.add_argument('--memory_size', type=int, default=340)
 
 parser.add_argument('--embed_dims', type=int, default=256)
+parser.add_argument('--interaction', default='Add', type=str,
+                    choices=['Concat', 'Add'])
 parser.add_argument('--cross-attn', action='store_true')
 parser.add_argument('--attn-method', default='Spatial', type=str,
-                    choices=['Spatial', 'Temporal', 'SpatialTemporal'])
+                    choices=['Spatial', 'Temporal', 'SpatialTemporal', 'WeightAttention', 'SCA', 'CMCI'])
 parser.add_argument('--av-attn', action='store_true')
+parser.add_argument('--av-attn-channel', type=int, default=32)
 parser.add_argument('--contrastive', action='store_true')
 parser.add_argument('--shallow-sps', action='store_true')
 parser.add_argument('--temperature', type=float, default=0.1)
@@ -753,6 +756,10 @@ def train_epoch(
                     output = model(inputs)
 
                 loss = loss_fn(output, target)
+                if args.attn_method == "CMCI":
+                    loss += loss_fn(audio_feature, target)
+                    loss += loss_fn(visual_feature, target)
+
                 if args.contrastive:
                     loss_avAttn = class_contrastive_loss(audio_feature, visual_feature, target, None ,temperature=args.temperature)
                     loss += loss_avAttn
@@ -1161,7 +1168,9 @@ if __name__ == '__main__':
             args.modality,
             "cross-attn_{}".format(args.cross_attn),
             "temperature_{}".format(args.temperature),
+            "interaction-{}".format(args.interaction),
             "av-attn_{}".format(args.av_attn),
+            "av-attn-channel_{}".format(args.av_attn_channel),
             "attn-method_{}".format(args.attn_method),
             "alpha_{}".format(args.alpha),
             "contrastive-{}".format(args.contrastive),
@@ -1287,8 +1296,10 @@ if __name__ == '__main__':
             in_channels=args.channels,
             embed_dims=args.embed_dims,
             shallow_sps=args.shallow_sps,
+            interaction=args.interaction,
             cross_attn = args.cross_attn,
             av_attn = args.av_attn,
+            av_attn_channel = args.av_attn_channel,
             attn_method = args.attn_method,
             alpha=args.alpha,
         )

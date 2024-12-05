@@ -367,36 +367,37 @@ def spikformer(pretrained=False, **kwargs):
 
 # ------------------------------------------以下是audio-visual的部分------------
 class AVattention(nn.Module):
-    def __init__(self, channel=512, reduction=16, group=1, L=32):
+    def __init__(self, channel=512, av_attn_channel=64):
         super().__init__()
-        self.d = max(L, channel // reduction)
+        self.d = av_attn_channel
         self.fc = nn.Linear(channel, self.d)
         self.fcs = nn.ModuleList([])
         for i in range(2):
             self.fcs.append(nn.Linear(self.d, channel))
-        self.softmax = nn.Softmax(dim=0)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x, y):
         """
             x, y: [T, B, C]
-            return [T, B, C]
+            return [B, C]
         """
+        x, y = x.mean(0), y.mean(0)
 
-        t, b, c= x.size()
+        b, c = x.size()
 
         ### fuse
         U = x + y
 
         ### reduction channel
-        Z = self.fc(U)  # T, B, d
+        Z = self.fc(U)  # B, d
 
         ### calculate attention weight
         weights = []
         for fc in self.fcs:
             weight = fc(Z)
-            weights.append(weight.view(t, b, c))  # t, b, c
-        attention_weights = torch.stack(weights, 0)  # k,t,b,c
-        attention_weights = self.softmax(attention_weights)  # k,t,bs,channel
+            weights.append(weight.view(b, c))  # b, c
+        attention_weights = torch.stack(weights, 0)  # k,b,c
+        attention_weights = self.sigmoid(attention_weights)  # k,bs,channel
 
         ### fuse
         V = attention_weights[0] * x + attention_weights[1] * y
@@ -567,7 +568,7 @@ class SpatialTemporalAudioVisualSSA(BaseModule):
         a_reduced = a.mean(dim=3)  # Shape: (T, B, C)
         b_reduced = b.mean(dim=0)  # Shape: (B, C, N)
 
-        a_expanded = a_reduced.unsqueeze(-1)  # Shape: (1, B, C, N)
+        a_expanded = a_reduced.unsqueeze(-1)  # Shape: (T, B, C, 1)
         a_expanded = a_expanded.expand(-1, -1, -1, N)  # Shape: (T, B, C, N)
 
         b_expanded = b_reduced.unsqueeze(0)  # Shape: (1, B, C, N)
@@ -584,6 +585,8 @@ class AudioVisualBlock(nn.Module):
         super().__init__()
         self.norm1 = norm_layer(dim)
 
+        self.attn_method = attn_method
+
         if attn_method == "Spatial":
             self.attn = SpatialAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
                             attn_drop=attn_drop, sr_ratio=sr_ratio)
@@ -593,12 +596,266 @@ class AudioVisualBlock(nn.Module):
         elif attn_method == "SpatialTemporal":
             self.attn = SpatialTemporalAudioVisualSSA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
                             attn_drop=attn_drop, sr_ratio=sr_ratio)
+        elif attn_method == "WeightAttention":
+            self.attn = WeightAttention(dim, step=step)
+        elif attn_method == "SCA_AV":
+            self.attn = SCA_AV(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                            attn_drop=attn_drop, sr_ratio=sr_ratio)
+        elif attn_method == "SCA_VA":
+            self.attn = SCA_VA(dim, step=step, TIM_alpha=TIM_alpha, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                            attn_drop=attn_drop, sr_ratio=sr_ratio)
+        elif attn_method == "CMCI":
+            self.attn = CMCI(dim, step=step)
         self.norm2 = norm_layer(dim)
 
         self.alpha = alpha
 
     def forward(self, x, y):
-        x = x + self.attn(x, y) * self.alpha
+        SpatialTemporalBrach = self.attn(x, y)
+        if self.attn_method == "CMCI":
+            x = x
+        elif self.attn_method == "WeightAttention" or self.attn_method == "SCA_AV" or self.attn_method == "SCA_VA":
+            x = SpatialTemporalBrach
+        else:
+            x = x + SpatialTemporalBrach * self.alpha
+        return x, SpatialTemporalBrach
+
+class WeightAttention(BaseModule):
+    def __init__(self, dim, step=10):
+        super().__init__(step=10, encode_type='direct')
+        self.dim = dim
+
+        self.fc1 = nn.Linear(dim * 2, dim)
+        self.fc2 = nn.Linear(dim, 1)
+
+    def forward(self, x, y):
+        self.reset()
+
+        T, B, C, N = x.shape
+
+        x_fea, y_fea = x.mean(-1), y.mean(-1)
+
+        # 1. Concatenate visual and auditory modality outputs
+        concat_feat = torch.cat((x_fea, y_fea), dim=-1)  # [T, B, 2*C]
+
+        # 2. Pass concatenated features through FC layer to process them
+        fusion_feat = self.fc1(concat_feat)      # [T, B, C]
+
+        # 3. Estimate attention weights for both modalities (no softmax applied here)
+        w = self.fc2(fusion_feat) # [T, B, 1]
+
+        x = w.unsqueeze(-1) * x
+
+        return x
+
+
+class SCA_VA(BaseModule):
+    def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
+                 drop=0., attn_drop=0.,
+                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1):
+        super().__init__(step=10, encode_type='direct')
+        assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
+        self.dim = dim
+
+        self.num_heads = num_heads
+
+        self.in_channels = dim // num_heads
+
+        self.scale = 0.25
+
+        self.q_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.q_bn = nn.BatchNorm1d(dim)
+        self.q_lif = MyNode(step=step, tau=2.0)
+
+        self.k_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.k_bn = nn.BatchNorm1d(dim)
+        self.k_lif = MyNode(step=step, tau=2.0)
+
+        self.v_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.v_bn = nn.BatchNorm1d(dim)
+        self.v_lif = MyNode(step=step, tau=2.0)
+
+        self.attn_drop = nn.Dropout(0.2)
+        self.res_lif = MyNode(step=step, tau=2.0)
+        self.attn_lif = MyNode(step=step, tau=2.0, v_threshold=0.5, )
+
+        self.proj_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.proj_bn = nn.BatchNorm1d(dim)
+        self.proj_lif = MyNode(step=step, tau=2.0, )
+
+        self.rpb_lif = MyNode(step=step, tau=2.0, )
+
+    def compute_RPB_matrix(self, N):
+        """
+        计算相对位置偏置矩阵 B。
+        Args:
+            N: 平面大小 (H * W)
+        Returns:
+            B: 相对位置偏置矩阵 (N, N)
+        """
+        # 计算网格的大小 (sqrt(N), sqrt(N))
+        H = W = int(N ** 0.5)  # 假设 N 是一个完美的平方数
+
+        M = H + 1
+
+        # 创建位置矩阵 P (大小为 2M-1)
+        P = torch.randn((2 * M - 1), (2 * M - 1))  # (2M-1) x (2M-1)
+
+        # 初始化B矩阵
+        B = torch.zeros((N, N))  # 大小为 N x N
+
+        # 计算相对位置偏置
+        for i in range(H):
+            for j in range(W):
+                i_x = i
+                i_y = j
+                for k in range(H):
+                    for l in range(W):
+                        j_x = k
+                        j_y = l
+                        f_val = i_x - j_x  # 计算横向相对位置差
+                        g_val = i_y - j_y  # 计算纵向相对位置差
+                        idx = f_val + M - 1  # 横向位置索引
+                        idy = g_val + M - 1  # 纵向位置索引
+                        if 0 <= idx < (2 * M - 1) and 0 <= idy < (2 * M - 1):
+                            B[i * W + j, k * W + l] = P[idx, idy]  # 填充B矩阵
+
+        return B
+
+    def forward(self, x, y):
+        self.reset()
+
+        T, B, C, N = x.shape
+
+        x_for_qkv = x.flatten(0, 1)
+        y_for_qkv = y.flatten(0, 1)
+
+        q_conv_out = self.q_conv(x_for_qkv)
+        q_conv_out = self.q_bn(q_conv_out).reshape(T, B, C, N).contiguous()
+        q_conv_out = self.q_lif(q_conv_out.flatten(0, 1)).reshape(T, B, C, N).transpose(-2, -1)
+        q = q_conv_out.reshape(T, B, N, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        k_conv_out = self.k_conv(y_for_qkv)
+        k_conv_out = self.k_bn(k_conv_out).reshape(T, B, C, N).contiguous()
+        k_conv_out = self.k_lif(k_conv_out.flatten(0, 1)).reshape(T, B, C, N).transpose(-2, -1)
+        k = k_conv_out.reshape(T, B, N, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        v_conv_out = self.v_conv(y_for_qkv)
+        v_conv_out = self.v_bn(v_conv_out).reshape(T, B, C, N).contiguous()
+        v_conv_out = self.v_lif(v_conv_out.flatten(0, 1)).reshape(T, B, C, N).transpose(-2, -1)
+        v = v_conv_out.reshape(T, B, N, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        # SSA
+        attn = (q @ k.transpose(-2, -1))
+
+        B_matrix = self.compute_RPB_matrix(N)
+        B_matrix = B_matrix.reshape(1, 1, 1, N, N).to(attn.device)
+
+        attn = (attn + B_matrix).reshape(T*B, -1, N*N)
+        attn = self.rpb_lif(attn)
+        attn = attn.reshape(T, B, -1, N, N)
+
+        x = (attn @ v) * self.scale
+
+        x = x.transpose(3, 4).reshape(T, B, C, N).contiguous()
+        x = self.attn_lif(x.flatten(0, 1))
+        x = self.proj_lif(self.proj_bn(self.proj_conv(x))).reshape(T, B, C, N)
+
+        return x
+
+
+class SCA_AV(BaseModule):
+    def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
+                 drop=0., attn_drop=0.,
+                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1):
+        super().__init__(step=10, encode_type='direct')
+        assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
+        self.dim = dim
+
+        self.num_heads = num_heads
+
+        self.in_channels = dim // num_heads
+
+        self.scale = 0.25
+
+        self.q_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.q_bn = nn.BatchNorm1d(dim)
+        self.q_lif = MyNode(step=step, tau=2.0)
+
+        self.k_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.k_bn = nn.BatchNorm1d(dim)
+        self.k_lif = MyNode(step=step, tau=2.0)
+
+        self.v_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.v_bn = nn.BatchNorm1d(dim)
+        self.v_lif = MyNode(step=step, tau=2.0)
+
+        self.attn_drop = nn.Dropout(0.2)
+        self.res_lif = MyNode(step=step, tau=2.0)
+        self.attn_lif = MyNode(step=step, tau=2.0, v_threshold=0.5, )
+
+        self.proj_conv = nn.Conv1d(dim, dim, kernel_size=1, stride=1, bias=False)
+        self.proj_bn = nn.BatchNorm1d(dim)
+        self.proj_lif = MyNode(step=step, tau=2.0, )
+
+        self.rpb_lif = MyNode(step=step, tau=2.0, )
+
+    def forward(self, x, y):
+        self.reset()
+
+        T, B, C, N = x.shape
+
+        x_for_qkv = x.flatten(0, 1)
+        y_for_qkv = y.flatten(0, 1)
+
+        q_conv_out = self.q_conv(x_for_qkv)
+        q_conv_out = self.q_bn(q_conv_out).reshape(T, B, C, N).contiguous()
+        q_conv_out = self.q_lif(q_conv_out.flatten(0, 1)).reshape(T, B, C, N).transpose(-2, -1)
+        q = q_conv_out.reshape(T, B, N, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        k_conv_out = self.k_conv(y_for_qkv)
+        k_conv_out = self.k_bn(k_conv_out).reshape(T, B, C, N).contiguous()
+        k_conv_out = self.k_lif(k_conv_out.flatten(0, 1)).reshape(T, B, C, N).transpose(-2, -1)
+        k = k_conv_out.reshape(T, B, N, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        v_conv_out = self.v_conv(y_for_qkv)
+        v_conv_out = self.v_bn(v_conv_out).reshape(T, B, C, N).contiguous()
+        v_conv_out = self.v_lif(v_conv_out.flatten(0, 1)).reshape(T, B, C, N).transpose(-2, -1)
+        v = v_conv_out.reshape(T, B, N, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
+
+        # SSA
+        attn = (q @ k.transpose(-2, -1))
+
+        x = (attn @ v) * self.scale
+
+        x = x.transpose(3, 4).reshape(T, B, C, N).contiguous()
+        x = self.attn_lif(x.flatten(0, 1))
+        x = self.proj_lif(self.proj_bn(self.proj_conv(x))).reshape(T, B, C, N)
+
+        return x
+
+class CMCI(BaseModule):
+    def __init__(self, dim, step=10):
+        super().__init__(step=10, encode_type='direct')
+        self.dim = dim
+
+        self.fc1 = nn.Linear(dim, dim)
+        self.fc2 = nn.Linear(dim, dim)
+        self.v_lif = MyNode(step=step, tau=2.0)
+        self.mlp = MLPBlock(dim=dim, step=step, mlp_ratio=4, drop=0.)
+
+    def forward(self, x, y):
+        self.reset()
+
+        T, B, C, N = x.shape
+
+        x = self.fc1(x.transpose(-2, -1))  # T B N C
+        y = self.fc2(y.transpose(-2, -1))  # T B N C
+
+        current = (x + y).transpose(-2, -1)  # T B C N;
+
+        x = self.v_lif(current)
+        x = self.mlp(x)
         return x
 
 class MLPBlock(nn.Module):
@@ -626,9 +883,19 @@ class AudioVisualSpikformer(nn.Module):
         self.cross_attn = kwargs['cross_attn'] if 'cross_attn' in kwargs else False
         self.av_attn = kwargs['av_attn'] if 'av_attn' in kwargs else False
         shallow_sps = kwargs['shallow_sps'] if 'shallow_sps' in kwargs else False
-        attn_method = kwargs['attn_method'] if 'attn_method' in kwargs else None
+
+        attn_method_list = ["init", "init"]
+        attn_method = kwargs['attn_method'] if 'attn_method' in kwargs else None  # 下一步做成列表
+        self.attn_method = attn_method
+        if attn_method == "SCA":
+            attn_method_list[0] = attn_method + "_AV"
+            attn_method_list[1] = attn_method + "_VA"
+        else:
+            attn_method_list[0] = attn_method
+            attn_method_list[1] = attn_method
         embed_dims = kwargs['embed_dims'] if 'embed_dims' in kwargs else 256
         alpha = kwargs['alpha'] if 'alpha' in kwargs else 1.0
+        av_attn_channel = kwargs['av_attn_channel'] if 'av_attn_channel' in kwargs else 32
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depths)]  # stochastic depth decay rule
 
@@ -668,14 +935,14 @@ class AudioVisualSpikformer(nn.Module):
         block = nn.ModuleList([AudioVisualBlock(step=step, TIM_alpha=TIM_alpha,
                                      dim=embed_dims, num_heads=num_heads, mlp_ratio=mlp_ratios, qkv_bias=qkv_bias,
                                      qk_scale=qk_scale, drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[j],
-                                     norm_layer=norm_layer, sr_ratio=sr_ratios, attn_method=attn_method, alpha=alpha)
+                                     norm_layer=norm_layer, sr_ratio=sr_ratios, attn_method=attn_method_list[j], alpha=alpha)
 
                                for j in range(depths)])
 
         mlp = nn.ModuleList([MLPBlock(dim=embed_dims, step=step, mlp_ratio=mlp_ratios, drop=drop_rate)
             for j in range(depths)])
 
-        av_attention = AVattention(channel=embed_dims)
+        av_attention = AVattention(channel=embed_dims, av_attn_channel=av_attn_channel)
 
         setattr(self, f"audio_patch_embed", audio_patch_embed)
         setattr(self, f"visual_patch_embed", visual_patch_embed)
@@ -684,7 +951,10 @@ class AudioVisualSpikformer(nn.Module):
         setattr(self, f"mlp", mlp)
 
         # classification head
-        self.head = nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity()
+        if self.attn_method == "CMCI":
+            self.head = nn.ModuleList([nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity() for j in range(3)])
+        else:
+            self.head = nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity()
         self.apply(self._init_weights)
 
     @torch.jit.ignore
@@ -716,9 +986,14 @@ class AudioVisualSpikformer(nn.Module):
         audio = audio_patch_embed(audio)
         visual = visual_patch_embed(visual)
 
+        audio_SpatialTemporalBrach = None
+        visual_SpatialTemporalBrach = None
+
         if self.cross_attn:
-            audio_feature = block[0](audio, visual)
-            visual_feature = block[1](visual, audio)
+            audio_feature, audio_SpatialTemporalBrach = block[0](audio, visual)
+            visual_feature, visual_SpatialTemporalBrach = block[1](visual, audio)
+            audio_SpatialTemporalBrach = audio_SpatialTemporalBrach.mean(-1)
+            visual_SpatialTemporalBrach = visual_SpatialTemporalBrach.mean(-1)
         else:
             audio_feature = audio
             visual_feature = visual
@@ -732,15 +1007,25 @@ class AudioVisualSpikformer(nn.Module):
         if self.av_attn:
             fused_feature = av_attention(audio_feature, visual_feature)
         else:
-            fused_feature = audio_feature + visual_feature  # T B C N
-        return fused_feature, audio_feature, visual_feature
+            fused_feature = audio_feature + visual_feature  # T B C
+            fused_feature = fused_feature.mean(0) # B C
+
+        if self.attn_method == "CMCI":
+            return audio_SpatialTemporalBrach.mean(0), audio_feature.mean(0), visual_feature.mean(0)
+        else:
+            return fused_feature, audio_SpatialTemporalBrach, visual_SpatialTemporalBrach
 
     def forward(self, x):
         audio, visual = x  # B T C H W
         audio = audio.permute(1, 0, 2, 3, 4)
         visual = visual.permute(1, 0, 2, 3, 4)
-        x, audio_feature, visual_feature = self.forward_features(audio, visual)  # T B C N
-        x = self.head(x.mean(0))
+        x, audio_feature, visual_feature = self.forward_features(audio, visual)  # T B C
+        if self.attn_method == "CMCI":
+            x = self.head[0](x)
+            audio_feature = self.head[1](audio_feature)
+            visual_feature = self.head[2](visual_feature)
+        else:
+            x = self.head(x)
         return x, audio_feature, visual_feature
 
     def incremental_classifier(self, numclass):
