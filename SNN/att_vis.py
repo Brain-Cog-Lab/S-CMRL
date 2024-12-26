@@ -477,16 +477,12 @@ def main(model, loader_train, loader_eval, output_dir):
     if args.resume:
         args.eval = True
         # checkpoint = torch.load(args.resume, map_location='cpu')
-        # model.load_state_dict(checkpoint['state_dict'], False)
-        resume_epoch = resume_checkpoint(
-            model, args.resume,
-            optimizer=None if args.no_resume_opt else optimizer,
-            loss_scaler=None if args.no_resume_opt else loss_scaler,
-            log_info=args.local_rank == 0)
-        # print(model.get_attr('mu'))
-        # print(model.get_attr('sigma'))
-        if hasattr(model, 'set_threshold'):
-            model.set_threshold(args.threshold)
+        model.load_state_dict(torch.load(args.resume)['state_dict'], strict=True)
+        # resume_epoch = resume_checkpoint(
+        #     model, args.resume,
+        #     optimizer=None if args.no_resume_opt else optimizer,
+        #     loss_scaler=None if args.no_resume_opt else loss_scaler,
+        #     log_info=args.local_rank == 0)
 
     if args.critical_loss or args.spike_rate:
         model.set_requires_fp(True)
@@ -580,18 +576,10 @@ def main(model, loader_train, loader_eval, output_dir):
     best_epoch = None
 
     if args.eval:  # evaluate the model
-        # if args.distributed:
-        #     raise NotImplementedError('eval not has not been verified for distributed')
-        # else:
-        #     load_checkpoint(model, args.eval_checkpoint, args.model_ema)
         model.eval()
-        for t in range(1, args.step * 3):
-        # for t in range(args.step, args.step + 1):
-            model.set_attr('step', t)
-            val_metrics = validate(start_epoch, model, loader_eval, validate_loss_fn, args,
-                                   visualize=args.visualize, spike_rate=args.spike_rate,
-                                   tsne=args.tsne, conf_mat=args.conf_mat, summary_writer=summary_writer)
-            print(f"[STEP:{t}], Top-1 accuracy of the model is: {val_metrics['top1']:.1f}%")
+        validate(start_epoch, model, loader_eval, validate_loss_fn, args,
+                 visualize=args.visualize, spike_rate=args.spike_rate,
+                 tsne=args.tsne, conf_mat=args.conf_mat, summary_writer=summary_writer)
         return
 
     saver = None
@@ -846,6 +834,12 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress,
     end = time.time()
     last_idx = len(loader) - 1
     iters_per_epoch = len(loader)
+
+    att_layer = model._modules['module'].block[0].attn  # extract attention maps from the layer
+
+    map = att_layer.register_forward_hook(fun)
+
+
     with torch.no_grad():
 
         for batch_idx, (inputs, target) in enumerate(loader):
@@ -972,7 +966,6 @@ if __name__ == '__main__':
             "contrastive-{}".format(args.contrastive),
             "temperature_{}".format(args.temperature),
             "snr_{}".format(args.snr),
-            "embed_dims_{}".format(args.embed_dims),
             args.node_type,
             str(args.step),
             # str(args.img_size)
@@ -1087,16 +1080,8 @@ if __name__ == '__main__':
     )
 
     if args.load_avmodel:
-        if args.dataset == "CREMAD":
-            checkpoint = torch.load(
-                "/mnt/home/hexiang/S-CMRL/SNN/exp_results/AVspikformer-CREMAD-audio-visual-interaction-Add-attn-method_SpatialTemporal-cross-attn_True-alpha_1.0-contrastive-True-temperature_0.1-snr_-100-LIFNode-4/model_best.pth.tar",
-                map_location='cpu')['state_dict']
-        elif args.dataset == "UrbanSound8K":
-            checkpoint = torch.load(
-                "/mnt/home/hexiang/S-CMRL/SNN/exp_results/AVspikformer-UrbanSound8K-audio-visual-interaction-Add-attn-method_SpatialTemporal-cross-attn_True-alpha_1.5-contrastive-True-temperature_0.5-snr_-100-LIFNode-4/model_best.pth.tar",
-                map_location='cpu')['state_dict']
-        else:
-            raise NotImplementedError
+        checkpoint = torch.load("/mnt/home/hexiang/MCF/SNN/exp_results/AVspikformer-CREMAD-audio-visual-interaction-Add-attn-method_SpatialTemporal-cross-attn_True"
+                                "-alpha_1.0-contrastive-True-temperature_0.1-LIFNode-4--20241205-112130/model_best.pth.tar", map_location='cpu')['state_dict']
 
         audio_patch_embed_state_dict = {k.replace('audio_patch_embed.', ''): v
                                          for k, v in checkpoint.items()

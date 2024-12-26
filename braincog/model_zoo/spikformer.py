@@ -225,10 +225,15 @@ class ShallowSPS(BaseModule):
 
         self.if_UCF = if_UCF
 
-        self.proj_conv = nn.Conv2d(in_channels, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
-        self.proj_bn = nn.BatchNorm2d(embed_dims)
+        self.proj_conv = nn.Conv2d(in_channels, embed_dims // 2, kernel_size=3, stride=1, padding=1, bias=False)
+        self.proj_bn = nn.BatchNorm2d(embed_dims // 2)
         self.proj_lif = MyNode(step=step, tau=2.0)
         self.maxpool = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
+
+        self.proj_conv1 = nn.Conv2d(embed_dims // 2, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
+        self.proj_bn1 = nn.BatchNorm2d(embed_dims)
+        self.proj_lif1 = MyNode(step=step, tau=2.0)
+        self.maxpool1 = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
 
         self.rpe_conv = nn.Conv2d(embed_dims, embed_dims, kernel_size=3, stride=1, padding=1, bias=False)
         self.rpe_bn = nn.BatchNorm2d(embed_dims)
@@ -249,10 +254,15 @@ class ShallowSPS(BaseModule):
         x = self.proj_lif(x.flatten(0, 1)).contiguous()
         x = self.maxpool(x)
 
-        x_rpe = self.rpe_bn(self.rpe_conv(x)).reshape(T, B, -1, H // 2, W // 2).contiguous()
+        x = self.proj_conv1(x)
+        x = self.proj_bn1(x).reshape(T, B, -1, H // 2, W // 2).contiguous()
+        x = self.proj_lif1(x.flatten(0, 1)).contiguous()
+        x = self.maxpool1(x)
+
+        x_rpe = self.rpe_bn(self.rpe_conv(x)).reshape(T, B, -1, H // 4, W // 4).contiguous()
         x_rpe = self.rpe_lif(x_rpe.flatten(0, 1)).contiguous()
         x = x + x_rpe
-        x = x.reshape(T, B, -1, (H // 2) * (W // 2)).contiguous()
+        x = x.reshape(T, B, -1, (H // 4) * (W // 4)).contiguous()
 
         return x  # T B C N
 
@@ -365,7 +375,6 @@ def spikformer(pretrained=False, **kwargs):
     return model
 
 
-# ------------------------------------------以下是audio-visual的部分------------
 class AVattention(nn.Module):
     def __init__(self, channel=512, av_attn_channel=64):
         super().__init__()
@@ -402,7 +411,6 @@ class AVattention(nn.Module):
         ### fuse
         V = attention_weights[0] * x + attention_weights[1] * y
         return V
-
 
 class SpatialAudioVisualSSA(BaseModule):
     def __init__(self, dim, step=10, encode_type='direct', num_heads=16, TIM_alpha=0.5, qkv_bias=False, qk_scale=None,
@@ -513,24 +521,24 @@ class TemporalAudioVisualSSA(BaseModule):
         self.reset()
 
         T, B, C, N = x.shape
-        x =  x.permute(3, 1, 2, 0)  # N, B, C , T
+        # x =  x.permute(3, 1, 2, 0)  # N, B, C , T
 
         x_for_qkv = x.flatten(0, 1)
         y_for_qkv = y.flatten(0, 1)
 
         q_conv_out = self.q_conv(x_for_qkv)
-        q_conv_out = self.q_bn(q_conv_out).reshape(N, B, C, T).contiguous()
-        q_conv_out = self.q_lif(q_conv_out.flatten(0, 1)).reshape(N, B, C, T).transpose(-2, -1)
+        q_conv_out = self.q_bn(q_conv_out).reshape(T, B, C, N)
+        q_conv_out = self.q_lif(q_conv_out.flatten(0, 1)).reshape(T, B, C, N).permute(3, 1, 0, 2).contiguous()  # T B C N -> N, B, T, C
         q = q_conv_out.reshape(N, B, T, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
         k_conv_out = self.k_conv(y_for_qkv)
-        k_conv_out = self.k_bn(k_conv_out).reshape(N, B, C, T).contiguous()
-        k_conv_out = self.k_lif(k_conv_out.flatten(0, 1)).reshape(N, B, C, T).transpose(-2, -1)
+        k_conv_out = self.k_bn(k_conv_out).reshape(T, B, C, N)
+        k_conv_out = self.k_lif(k_conv_out.flatten(0, 1)).reshape(T, B, C, N).permute(3, 1, 0, 2).contiguous()
         k = k_conv_out.reshape(N, B, T, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
         v_conv_out = self.v_conv(y_for_qkv)
-        v_conv_out = self.v_bn(v_conv_out).reshape(N, B, C, T).contiguous()
-        v_conv_out = self.v_lif(v_conv_out.flatten(0, 1)).reshape(N, B, C, T).transpose(-2, -1)
+        v_conv_out = self.v_bn(v_conv_out).reshape(T, B, C, N)
+        v_conv_out = self.v_lif(v_conv_out.flatten(0, 1)).reshape(T, B, C, N).permute(3, 1, 0, 2).contiguous()
         v = v_conv_out.reshape(N, B, T, self.num_heads, C // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
         # TIM on Q
@@ -540,10 +548,10 @@ class TemporalAudioVisualSSA(BaseModule):
         attn = (q @ k.transpose(-2, -1))
         x = (attn @ v) * self.scale
 
-        x = x.transpose(3, 4).reshape(N, B, C, T).contiguous()
+        x = x.reshape(N, B, T, C).permute(2, 1, 3, 0).contiguous()  # N B T C -> T, B, C, N
         x = self.attn_lif(x.flatten(0, 1))
-        x = self.proj_lif(self.proj_bn(self.proj_conv(x))).reshape(N, B, C, T).permute(3, 1, 2, 0).contiguous()  # N, B, C, T -> T, B, C, N
-
+        # x = self.proj_lif(self.proj_bn(self.proj_conv(x))).reshape(N, B, C, T).permute(3, 1, 2, 0).contiguous()  # N, B, C, T -> T, B, C, N
+        x = self.proj_lif(self.proj_bn(self.proj_conv(x))).reshape(T, B, C, N)  # N, B, C, T -> T, B, C, N
         return x
 
 
@@ -881,7 +889,7 @@ class AudioVisualSpikformer(nn.Module):
         self.depths = depths
         in_channels = kwargs['in_channels'] if 'in_channels' in kwargs else 2
         self.cross_attn = kwargs['cross_attn'] if 'cross_attn' in kwargs else False
-        self.av_attn = kwargs['av_attn'] if 'av_attn' in kwargs else False
+        self.interaction = kwargs['interaction'] if 'interaction' in kwargs else False
         shallow_sps = kwargs['shallow_sps'] if 'shallow_sps' in kwargs else False
 
         attn_method_list = ["init", "init"]
@@ -895,7 +903,6 @@ class AudioVisualSpikformer(nn.Module):
             attn_method_list[1] = attn_method
         embed_dims = kwargs['embed_dims'] if 'embed_dims' in kwargs else 256
         alpha = kwargs['alpha'] if 'alpha' in kwargs else 1.0
-        av_attn_channel = kwargs['av_attn_channel'] if 'av_attn_channel' in kwargs else 32
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depths)]  # stochastic depth decay rule
 
@@ -942,7 +949,7 @@ class AudioVisualSpikformer(nn.Module):
         mlp = nn.ModuleList([MLPBlock(dim=embed_dims, step=step, mlp_ratio=mlp_ratios, drop=drop_rate)
             for j in range(depths)])
 
-        av_attention = AVattention(channel=embed_dims, av_attn_channel=av_attn_channel)
+        av_attention = AVattention(channel=embed_dims, av_attn_channel=32)
 
         setattr(self, f"audio_patch_embed", audio_patch_embed)
         setattr(self, f"visual_patch_embed", visual_patch_embed)
@@ -951,6 +958,9 @@ class AudioVisualSpikformer(nn.Module):
         setattr(self, f"mlp", mlp)
 
         # classification head
+        if self.interaction == "Concat":
+            embed_dims = 2 * embed_dims
+
         if self.attn_method == "CMCI":
             self.head = nn.ModuleList([nn.Linear(embed_dims, num_classes) if num_classes > 0 else nn.Identity() for j in range(3)])
         else:
@@ -977,7 +987,6 @@ class AudioVisualSpikformer(nn.Module):
 
     def forward_features(self, audio, visual):
 
-        av_attention = getattr(self, f"av_attention")
         block = getattr(self, f"block")
         audio_patch_embed = getattr(self, f"audio_patch_embed")
         visual_patch_embed = getattr(self, f"visual_patch_embed")
@@ -1004,11 +1013,13 @@ class AudioVisualSpikformer(nn.Module):
         audio_feature = audio_feature.mean(-1)  # T B C N -> T B C
         visual_feature = visual_feature.mean(-1)  # T B C N -> T B C
 
-        if self.av_attn:
-            fused_feature = av_attention(audio_feature, visual_feature)
-        else:
+        if self.interaction == "Add":
             fused_feature = audio_feature + visual_feature  # T B C
-            fused_feature = fused_feature.mean(0) # B C
+        elif self.interaction == "Concat":
+            fused_feature = torch.cat((audio_feature, visual_feature), dim=-1)
+        else:
+            raise NotImplementedError
+        fused_feature = fused_feature.mean(0) # B C or B * 2C
 
         if self.attn_method == "CMCI":
             return audio_SpatialTemporalBrach.mean(0), audio_feature.mean(0), visual_feature.mean(0)
