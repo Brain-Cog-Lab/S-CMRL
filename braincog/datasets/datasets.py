@@ -529,7 +529,6 @@ def get_UrbanSound8K_data(batch_size, num_workers=8, same_da=False,root=DATA_DIR
         indices_test.extend(list(range(round(cnt_now + class_counts[i] * portion), cnt_now+class_counts[i])))
         cnt_now += class_counts[i]
 
-
     train_dataset = DiskCachedDataset(train_dataset,
                                       cache_path=os.path.join(DATA_DIR, 'UrbanSound8K-AV/{}/train_cache_{}'.format(modality, args.step)),
                                       transform=None, num_copies=3)
@@ -666,13 +665,13 @@ def get_AVmnistdvs_data(batch_size, step, dvs_da=False, **kwargs):
     train_loader = torch.utils.data.DataLoader(
         visual_train_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-        pin_memory=True, drop_last=True, num_workers=0
+        pin_memory=True, drop_last=True, num_workers=4
     )
 
     test_loader = torch.utils.data.DataLoader(
         visual_test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-        pin_memory=True, drop_last=False, num_workers=0
+        pin_memory=True, drop_last=False, num_workers=4
     )
 
     if modality == "visual":
@@ -753,13 +752,13 @@ def get_AVmnistdvs_data(batch_size, step, dvs_da=False, **kwargs):
     train_loader = torch.utils.data.DataLoader(
         audio_train_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-        pin_memory=True, drop_last=True, num_workers=0
+        pin_memory=True, drop_last=True, num_workers=4
     )
 
     test_loader = torch.utils.data.DataLoader(
         audio_test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-        pin_memory=True, drop_last=False, num_workers=0
+        pin_memory=True, drop_last=False, num_workers=4
     )
 
     if modality == "audio":
@@ -792,13 +791,13 @@ def get_AVmnistdvs_data(batch_size, step, dvs_da=False, **kwargs):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_train),
-        pin_memory=True, drop_last=True, num_workers=0
+        pin_memory=True, drop_last=True, num_workers=4
     )
 
     test_loader = torch.utils.data.DataLoader(
         test_dataset, batch_size=batch_size,
         sampler=torch.utils.data.sampler.SubsetRandomSampler(indices_test),
-        pin_memory=True, drop_last=False, num_workers=0
+        pin_memory=True, drop_last=False, num_workers=4
     )
 
     if modality == "audio-visual":

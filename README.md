@@ -1,7 +1,7 @@
-# Advancing Audio-Visual Transformer-Based Spiking Neural Networks via Semantic-Aware Cross-Modal Residual Learning
+# Advancing Audio-Visual Spiking Neural Networks via Semantic-Alignment  Cross-Modal Residual Learning
 Here is the PyTorch implementation of our paper. 
 
-**Paper Title: "Advancing Audio-Visual Transformer-Based Spiking Neural Networks via Semantic-Aware Cross-Modal Residual Learning"**
+**Paper Title: "Advancing Audio-Visual Spiking Neural Networks via Semantic-Alignment  Cross-Modal Residual Learning"**
 
 **Authors: Xiang He\*, Dongcheng Zhao\*, Yiting Dong, Guobin Shen,  Xin Yang, Yi Zeng**
 
@@ -11,21 +11,29 @@ Here is the PyTorch implementation of our paper.
 
 ## Method
 
-We construct a semantic-aware cross-modal residual learning framework, comprising a *cross-modal complementary spatiotemporal spiking attention mechanism* and a *semantic-enhanced optimization mechanism*, which provides an efficient feature fusion method for multimodal spiking neural networks. 
+We construct a semantic-alignment cross-modal residual learning framework for multimodal SNNs. This framework provides an efficient feature fusion strategy and achieves state-of-the-art performance on three public datasets, demonstrating superior accuracy and robustness compared to existing methods. 
 
-![method](./figs/method.jpg)
+<img src="./figs/method.jpg" alt="method" style="zoom:80%;" />
+
+Comparison of S-CMRL with state-of-the-art methods on three datasets:
+
+<img src="./figs/results.jpg" alt="results" style="zoom:80%;" />
 
 
 
 ## Training Script
 
-All experimental scripts can be found in `[run_classification.sh](./SNN/run_classification.sh)`
+All experimental scripts can be found in [run_classification.sh](./SNN/run_classification.sh)
 
 A sample script for our method on the CRMEA-D dataset is as follows：
 
 ```
-CUDA_VISIBLE_DEVICES=0 python train_snn.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --cross-attn --attn-method SpatialTemporal --alpha 1.0 --contrastive
+CUDA_VISIBLE_DEVICES=0 python train_snn.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --cross-attn --attn-method SpatialTemporal --alpha 1.5 --contrastive --temperature 0.07
 ```
+
+
+
+The well-trained model weights and training logs are available [here]() to reproduce the results from the paper.
 
 
 

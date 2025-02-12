@@ -31,10 +31,14 @@ class MLP(BaseModule):
         self.c_hidden = hidden_features
         self.c_output = out_features
 
+        self.id = nn.Identity()
+
     def forward(self, x):
         self.reset()
 
         T, B, C, N = x.shape
+
+        x = self.id(x)
 
         x = self.fc1_conv(x.flatten(0, 1))
         x = self.fc1_bn(x).reshape(T, B, self.c_hidden, N).contiguous()  # T B C N
@@ -589,7 +593,7 @@ class SpatialTemporalAudioVisualSSA(BaseModule):
 class AudioVisualBlock(nn.Module):
     def __init__(self, dim, num_heads, step=10, TIM_alpha=0.5, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0.,
                  attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1, attn_method='Spatial', alpha=1.0):
+                 drop_path=0., norm_layer=nn.LayerNorm, sr_ratio=1, attn_method='Spatial', alpha=1.0, contrastive=False):
         super().__init__()
         self.norm1 = norm_layer(dim)
 
@@ -617,6 +621,11 @@ class AudioVisualBlock(nn.Module):
         self.norm2 = norm_layer(dim)
 
         self.alpha = alpha
+        self.contrastive = contrastive
+        if self.contrastive:
+            self.trans_linear = nn.Linear(dim, dim)
+            self.trans_lif = MyNode(step=step, tau=2.0, v_threshold=0.5)
+
 
     def forward(self, x, y):
         SpatialTemporalBrach = self.attn(x, y)
@@ -624,8 +633,17 @@ class AudioVisualBlock(nn.Module):
             x = x
         elif self.attn_method == "WeightAttention" or self.attn_method == "SCA_AV" or self.attn_method == "SCA_VA":
             x = SpatialTemporalBrach
-        else:
+        # elif self.attn_method == "SCA_AV" or self.attn_method == "SCA_VA":
+        #     x = x + SpatialTemporalBrach
+        elif self.attn_method == "Spatial" or self.attn_method == "Temporal" or self.attn_method == "SpatialTemporal":
+            if self.contrastive:
+                T, B, C, N = SpatialTemporalBrach.shape
+                SpatialTemporalBrach = self.trans_linear(SpatialTemporalBrach.transpose(2, 3).contiguous())
+
+                self.trans_lif.n_reset()
+                SpatialTemporalBrach = self.trans_lif(SpatialTemporalBrach.flatten(0, 1)).transpose(1, 2).contiguous().reshape(T, B, C, N)
             x = x + SpatialTemporalBrach * self.alpha
+
         return x, SpatialTemporalBrach
 
 class WeightAttention(BaseModule):
@@ -891,6 +909,7 @@ class AudioVisualSpikformer(nn.Module):
         self.cross_attn = kwargs['cross_attn'] if 'cross_attn' in kwargs else False
         self.interaction = kwargs['interaction'] if 'interaction' in kwargs else False
         shallow_sps = kwargs['shallow_sps'] if 'shallow_sps' in kwargs else False
+        contrastive = kwargs['contrastive'] if 'contrastive' in kwargs else False
 
         attn_method_list = ["init", "init"]
         attn_method = kwargs['attn_method'] if 'attn_method' in kwargs else None  # 下一步做成列表
@@ -942,7 +961,7 @@ class AudioVisualSpikformer(nn.Module):
         block = nn.ModuleList([AudioVisualBlock(step=step, TIM_alpha=TIM_alpha,
                                      dim=embed_dims, num_heads=num_heads, mlp_ratio=mlp_ratios, qkv_bias=qkv_bias,
                                      qk_scale=qk_scale, drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[j],
-                                     norm_layer=norm_layer, sr_ratio=sr_ratios, attn_method=attn_method_list[j], alpha=alpha)
+                                     norm_layer=norm_layer, sr_ratio=sr_ratios, attn_method=attn_method_list[j], alpha=alpha, contrastive=contrastive)
 
                                for j in range(depths)])
 

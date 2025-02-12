@@ -7,6 +7,8 @@ import os
 import sys
 sys.path.append("/mnt/home/hexiang/S-CMRL/")
 
+from Pytorch_Grad_Cam.cam import *
+
 import random as buildin_random
 import logging
 from collections import OrderedDict
@@ -857,105 +859,89 @@ def validate(epoch, model, loader, loss_fn, args, amp_autocast=suppress,
     end = time.time()
     last_idx = len(loader) - 1
     iters_per_epoch = len(loader)
-    with torch.no_grad():
 
-        for batch_idx, (inputs, target) in enumerate(loader):
-            if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10" or args.dataset == "CREMAD":
+    cam_algorithm = GradCAMPlusPlus
+    # target_layers = [model.mlp[1].mlp.fc2_lif]
+    target_layers = [model.mlp[1].mlp.id]
+    # target_layers = [model.mlp[0].mlp.id]
+
+    with cam_algorithm(model=model,
+                       target_layers=target_layers,
+                       use_cuda=False) as cam:
+        if args.dataset == "UrbanSound8K" or args.dataset == "AvCifar10" or args.dataset == "CREMAD":
+            file_path = "/mnt/data/datasets/UrbanSound8K-AV/"
+            class_names = {
+                'air_conditioner': 0, 'car_horn': 1, 'children_playing': 2, 'dog_bark': 3, 'drilling': 4,
+                'engine_idling': 5, 'gun_shot': 6, 'jackhammer': 7, 'siren': 8, 'street_music': 9
+            }
+
+            #
+            visual_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(128),
+                transforms.ToTensor(),
+            ])
+            audio_test_transform = transforms.Compose([
+                transforms.Resize((128, 128)),
+                transforms.ToTensor(),
+            ])
+
+
+            ori_train_dataset = UrbanSound8KDataset(file_path, class_names, visual_transform=visual_transform,
+                                                audio_transform=audio_test_transform, modality="audio-visual")
+
+            # idx 8721 for street_music; 2210 for children_playing; 3171 for dog bark; for engine idling
+            listx = [8721, 2210, 3171, 5219]
+            for idx in listx:
+                x, _ = ori_train_dataset[idx]  # 找一个测试集上面的idx
+
+                x = x[1]
+                img = x.permute(1, 2, 0).numpy()  # H, W, C
+                plt.imshow(img)
+                # plt.show()
+                plt.axis('off')  # Turn off axis numbers and ticks
+                plt.savefig('figs/original/plot_id{}.svg'.format(idx), format='svg', bbox_inches='tight', pad_inches=0)
+                plt.close()
+
+                visual_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(128),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+
+                audio_test_transform = transforms.Compose([
+                transforms.Resize((128, 128)),  # 将频谱图像调整到224x224
+                transforms.ToTensor(),
+            ])
+
+                train_dataset = UrbanSound8KDataset(file_path, class_names, visual_transform=visual_transform,
+                                                    audio_transform=audio_test_transform, modality="audio-visual")
+                sample, _ = train_dataset[idx]
+                audio, visual = sample
+                audio, visual = audio.unsqueeze(0), visual.unsqueeze(0)
+
                 if args.modality == "audio-visual":
-                    inputs = list(repeat(item, 'b c w h -> b t c w h', t=args.step) for item in inputs)
-                else:
-                    inputs = repeat(inputs, 'b c w h -> b t c w h', t=args.step)
-            last_batch = batch_idx == last_idx
-            if not args.prefetcher or args.dataset != 'imnet':
-                if args.modality == "audio-visual":
-                    inputs, target = list(item.type(torch.FloatTensor).cuda() for item in inputs), target.cuda()
-                else:
-                    inputs, target = inputs.type(torch.FloatTensor).cuda(), target.cuda()
-            if args.channels_last:
-                inputs = inputs.contiguous(memory_format=torch.channels_last)
+                    inputs = [repeat(audio, 'b c w h -> b t c w h', t=args.step), repeat(visual, 'b c w h -> b t c w h', t=args.step)]
+                    inputs = list(item.type(torch.FloatTensor).cuda() for item in inputs)
 
-            if not args.distributed:
-                if (visualize or spike_rate or tsne or conf_mat or args.mem_dist) and not args.critical_loss:
-                    model.set_requires_fp(True)
+                grayscale_cam = cam(input_tensor=inputs,
+                                    targets=None,
+                                    aug_smooth=False,
+                                    eigen_smooth=False)
 
-            with amp_autocast():
+                # Here grayscale_cam has only one image in the batch
+                grayscale_cam = grayscale_cam[0, :]
 
-                if args.modality == "audio-visual":
-                    output, audio_feature, visual_feature = model(inputs)
-                else:
-                    output = model(inputs)
+                cam_image = show_cam_on_image(img, grayscale_cam, use_rgb=True, image_weight=0.5)
+                plt.imshow(cam_image)
+                # plt.show()
+                plt.axis('off')  # Turn off axis numbers and ticks
+                plt.savefig('figs/gradcam/plot_id{}.svg'.format(idx), format='svg', bbox_inches='tight', pad_inches=0)
+                plt.close()
 
-            if isinstance(output, (tuple, list)):
-                output = output[0]
-
-            # augmentation reduction
-            reduce_factor = args.tta
-            if reduce_factor > 1:
-                output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
-                target = target[0:target.size(0):reduce_factor]
-
-            # print(args.rank, output.shape, target.shape, max(target))
-            loss = loss_fn(output, target)
-            if args.tet_loss:
-                output = output.mean(0)
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-            if args.distributed:
-                reduced_loss = reduce_tensor(loss.data, args.world_size)
-                acc1 = reduce_tensor(acc1, args.world_size)
-                acc5 = reduce_tensor(acc5, args.world_size)
-            else:
-                reduced_loss = loss.data
-
-            torch.cuda.synchronize()
-
-            losses_m.update(reduced_loss.item(), output.size(0))
-            top1_m.update(acc1.item(), output.size(0))
-            top5_m.update(acc5.item(), output.size(0))
-
-            batch_time_m.update(time.time() - end)
-            end = time.time()
-
-            if args.local_rank == 0:
-                summary_writer.add_scalar(os.path.join(args.tensorboard_prefix, 'batch/val/top1'), acc1.item(), epoch * iters_per_epoch + batch_idx)
-                summary_writer.add_scalar(os.path.join(args.tensorboard_prefix, 'batch/val/top5'), acc5.item(), epoch * iters_per_epoch + batch_idx)
-                summary_writer.add_scalar(os.path.join(args.tensorboard_prefix, 'batch/val/loss'), loss.item(), epoch * iters_per_epoch + batch_idx)
-
-            if args.local_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
-                log_name = 'Test' + log_suffix
-
-            if not args.distributed and spike_rate:
-                spike_m.update(model.get_tot_spike() / output.size(0), output.size(0))
-
-                if not args.distributed and spike_rate:
-                    _logger.info(
-                        '[Spike Info]: {spike.val} ({spike.avg})'.format(
-                            spike=spike_m
-                        )
-                    )
-            if last_batch or batch_idx % args.log_interval == 0:
-                _logger.info(
-                    'Eval : {} '
-                    'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-                    'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})'
-                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
-                        epoch,
-                        batch_idx,
-                        last_idx,
-                        batch_time=batch_time_m,
-                        loss=losses_m,
-                        top1=top1_m,
-                        top5=top5_m,
-                        ))
-
-    # metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
     metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg)])
 
-    if args.local_rank == 0:
-        summary_writer.add_scalar(os.path.join(args.tensorboard_prefix, 'epoch/val/top1'), top1_m.avg, epoch)
-        summary_writer.add_scalar(os.path.join(args.tensorboard_prefix, 'epoch/val/top5'), top5_m.avg, epoch)
-        summary_writer.add_scalar(os.path.join(args.tensorboard_prefix, 'epoch/val/loss'), losses_m.avg, epoch)
     return metrics
 
 
@@ -1105,7 +1091,7 @@ if __name__ == '__main__':
                 map_location='cpu')['state_dict']
         elif args.dataset == "UrbanSound8K":
             checkpoint = torch.load(
-                "/mnt/home/hexiang/S-CMRL/SNN/exp_results/AVspikformer-UrbanSound8K-audio-visual-interaction-Add-attn-method_SpatialTemporal-cross-attn_True-alpha_1.5-contrastive-True-temperature_0.08-snr_-100-embed_dims_64-LIFNode-4/model_best.pth.tar",
+                "/mnt/home/hexiang/S-CMRL/SNN/exp_results/AVspikformer-UrbanSound8K-audio-visual-interaction-Add-attn-method_SpatialTemporal-cross-attn_True-alpha_1.5-contrastive-True-temperature_0.5-snr_-100-LIFNode-4/model_best.pth.tar",
                 map_location='cpu')['state_dict']
         else:
             raise NotImplementedError

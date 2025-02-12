@@ -83,13 +83,14 @@ if __name__ == '__main__':
     # # ------ plot block a ------------
     modality = "visual"
     major_locator = 8
+    embed_dims = 256
     if modality == "visual":
         major_locator = 4
     legend_list = ['Baseline', "S-CMRL (ours)"]
-    baseline_root = "/mnt/home/hexiang/MCF/SNN/exp_results/"
-    trainresults_root = "/mnt/home/hexiang/MCF/SNN/exp_results_singleModality/"
+    baseline_root = "/mnt/home/hexiang/S-CMRL/SNN/exp_results/"
+    trainresults_root = "/mnt/home/hexiang/S-CMRL/SNN/exp_results_singleModality/"
 
-    file_root = "spikformer-CREMAD-{}-interaction-Add-attn-method_Spatial-cross-attn_False-alpha_1.0-contrastive-False-temperature_0.1-snr_-100-LIFNode-4/summary.csv".format(modality)
+    file_root = "spikformer-CREMAD-{}-interaction-Add-attn-method_Spatial-cross-attn_False-alpha_1.0-contrastive-False-temperature_0.1-snr_-100-embed_dims_{}-LIFNode-4/summary.csv".format(modality, embed_dims)
 
     load_root = None
     type_list = ["single", "multimodal"]
