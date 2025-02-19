@@ -5,7 +5,7 @@ Here is the PyTorch implementation of our paper.
 
 **Authors: Xiang He\*, Dongcheng Zhao\*, Yiting Dong, Guobin Shen,  Xin Yang, Yi Zeng**
 
-\[[arxiv]()\] \[[paper]()\] \[[code](https://github.com/Brain-Cog-Lab/MCF)\]
+\[[arxiv](https://arxiv.org/abs/2502.12488)\] \[[paper]()\] \[[code](https://github.com/Brain-Cog-Lab/S-CMRL)\]
 
 
 
@@ -48,7 +48,15 @@ UrbanSound8K-AV datasets: [UrbanSound8K-AV](https://github.com/Guo-Lingyue/SMMT)
 ## Citation
 If our paper is useful for your research, please consider citing it:
 ```
-arxiv here
+@misc{he2025enhancingaudiovisualspikingneural,
+      title={Enhancing Audio-Visual Spiking Neural Networks through Semantic-Alignment and Cross-Modal Residual Learning}, 
+      author={Xiang He and Dongcheng Zhao and Yiting Dong and Guobin Shen and Xin Yang and Yi Zeng},
+      year={2025},
+      eprint={2502.12488},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2502.12488}, 
+}
 ```
 
 
