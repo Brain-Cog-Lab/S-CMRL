@@ -1,13 +1,31 @@
-# Advancing Audio-Visual Spiking Neural Networks via Semantic-Alignment  Cross-Modal Residual Learning
-Here is the PyTorch implementation of our paper. 
+<div align="center">
 
-**Paper Title: "Advancing Audio-Visual Spiking Neural Networks via Semantic-Alignment  Cross-Modal Residual Learning"**
+<h2 class="papername"> Enhancing Audio-Visual Spiking Neural Networks through Semantic-Alignment and   Cross-Modal Residual Learning </h2>
+<div>
+<div>
+    <a href="https://scholar.google.com/citations?user=Em5FqXYAAAAJ" target="_blank">Xiang He*</a>,
+    <a href="https://scholar.google.com/citations?user=2E9Drq8AAAAJ" target="_blank">Dongcheng Zhao*</a>,
+    <a href="https://scholar.google.com/citations?user=YLbBO9IAAAAJ" target="_blank">Yiting Dong</a>,
+    <a href="https://scholar.google.com/citations?user=Sv-WdBkAAAAJ" target="_blank">Guobin Shen</a>,
+    <a href="https://ieeexplore.ieee.org/author/37401423300" target="_blank">Xin Yang†</a>,
+    <a href="https://scholar.google.com/citations?user=Rl-YqPEAAAAJ" target="_blank">Yi Zeng†</a>
+</div>
 
-**Authors: Xiang He\*, Dongcheng Zhao\*, Yiting Dong, Guobin Shen,  Xin Yang, Yi Zeng**
+Institute of Automation, Chinese Academy of Sciences, Beijing<br>
+*Equal contribution
+†Corresponding author
 
 \[[arxiv](https://arxiv.org/abs/2502.12488)\] \[[paper]()\] \[[code](https://github.com/Brain-Cog-Lab/S-CMRL)\]
 
+[![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FBrain-Cog-Lab%2FS-CMRL&count_bg=%2379C83D&title_bg=%23555555&icon=&icon_color=%23E7E7E7&title=hits&edge_flat=false)](https://hits.seeyoufarm.com)
 
+</div>
+<br>
+
+</div>
+
+Here is the PyTorch implementation of our paper. 
+If you find this work useful for your research, please kindly cite our paper and star our repo.
 
 ## Method
 
