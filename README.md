@@ -43,7 +43,7 @@ Comparison of S-CMRL with state-of-the-art methods on three datasets:
 
 All experimental scripts can be found in [run_classification.sh](./SNN/run_classification.sh)
 
-A sample script for our method on the CRMEA-D dataset is as follows：
+A sample script for our method on the CREMA-D dataset is as follows：
 
 ```
 CUDA_VISIBLE_DEVICES=0 python train_snn.py --model AVspikformer --dataset CREMAD --epoch 100 --batch-size 128 --num-classes 6 --step 4 --modality audio-visual --cross-attn --attn-method SpatialTemporal --alpha 1.5 --contrastive --temperature 0.07
